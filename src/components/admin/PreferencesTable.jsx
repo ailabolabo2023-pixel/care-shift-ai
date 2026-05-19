@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Save, Check } from 'lucide-react';
+import { Save } from 'lucide-react';
 
-const PreferencesTable = ({ data, masterData, onUpdate, onSave, isDirty, currentMonth, monthlySettings, updateMonthlySettings }) => {
+const PreferencesTable = ({ data, masterData, onUpdate, currentMonth, monthlySettings, updateMonthlySettings }) => {
     const [localData, setLocalData] = useState([]);
     const [hasChanges, setHasChanges] = useState(false);
     const [localMonthlyHoliday, setLocalMonthlyHoliday] = useState(9);
@@ -35,41 +35,35 @@ const PreferencesTable = ({ data, masterData, onUpdate, onSave, isDirty, current
         newData[rowIndex] = { ...newData[rowIndex], [field]: value };
         setLocalData(newData);
         setHasChanges(true);
-        // Auto-save to draft
-        onUpdate(newData);
     };
 
     const handleMonthlySettingChange = (val) => {
-        const numVal = parseInt(val, 10);
-        setLocalMonthlyHoliday(numVal);
+        setLocalMonthlyHoliday(parseInt(val, 10));
         setHasChanges(true);
-        if (updateMonthlySettings && currentMonth) {
-            updateMonthlySettings(currentMonth, { monthlyHoliday: numVal });
-        }
     };
 
     const handleSave = () => {
-        // Reflect draft to formal excelData
-        if (onSave) {
-            onSave();
-            setHasChanges(false);
+        // Update Monthly Settings
+        if (updateMonthlySettings && currentMonth) {
+            updateMonthlySettings(currentMonth, { monthlyHoliday: localMonthlyHoliday });
         }
+
+        // Update Table Data
+        onUpdate(localData);
+        setHasChanges(false);
+        alert("希望条件・月設定を保存しました。");
     };
 
     if (!localData || localData.length === 0) return <div>データがありません</div>;
 
     const INPUT_FIELDS = [
-        { key: '休み希望', label: '休み希望', color: 'border-red-200 focus:ring-red-100', width: 'min-w-[140px]' },
-        { key: '有休', label: '有休', color: 'border-pink-200 focus:ring-pink-100', width: 'min-w-[100px]' },
-        { key: '早番希望', label: '早番希望', color: 'border-orange-200 focus:ring-orange-100', width: 'min-w-[100px]' },
-        { key: '日勤希望', label: '日勤希望', color: 'border-green-200 focus:ring-green-100', width: 'min-w-[100px]' },
-        { key: '遅出希望', label: '遅出希望', color: 'border-blue-200 focus:ring-blue-100', width: 'min-w-[100px]' },
-        { key: '夜勤希望', label: '夜勤希望', color: 'border-indigo-200 focus:ring-indigo-100', width: 'min-w-[100px]' },
-        { key: '夜勤研修', label: '夜勤研修', color: 'border-emerald-200 focus:ring-emerald-100', width: 'min-w-[120px]' },
-        { key: '研修', label: '研修', color: 'border-yellow-200 focus:ring-yellow-100', width: 'min-w-[100px]' },
-        { key: '証・予備', label: '予備', color: 'border-stone-300 focus:ring-stone-100', width: 'min-w-[100px]' },
-        { key: '誕休', label: '誕休', color: 'border-purple-200 focus:ring-purple-100', width: 'min-w-[100px]' },
-        { key: '出勤不可', label: '出勤不可', color: 'border-stone-200 focus:ring-stone-100', width: 'min-w-[140px]' },
+        { key: '休み希望', label: '休み希望', color: 'border-red-200 focus:ring-red-100', width: 'min-w-[150px]' },
+        { key: '有休', label: '有休', color: 'border-pink-200 focus:ring-pink-100', width: 'min-w-[120px]' },
+        { key: '早番希望', label: '早番希望', color: 'border-orange-200 focus:ring-orange-100', width: 'min-w-[120px]' },
+        { key: '日勤希望', label: '日勤希望', color: 'border-green-200 focus:ring-green-100', width: 'min-w-[120px]' },
+        { key: '遅出希望', label: '遅出希望', color: 'border-blue-200 focus:ring-blue-100', width: 'min-w-[120px]' },
+        { key: '夜勤希望', label: '夜勤希望', color: 'border-indigo-200 focus:ring-indigo-100', width: 'min-w-[120px]' },
+        { key: '出勤不可', label: '出勤不可', color: 'border-stone-200 focus:ring-stone-100', width: 'min-w-[120px]' },
     ];
 
     return (
@@ -97,8 +91,8 @@ const PreferencesTable = ({ data, masterData, onUpdate, onSave, isDirty, current
                         <span className="text-xs text-stone-400">※日付はカンマ区切りで入力（例: 1, 5, 15）</span>
                         <button
                             onClick={handleSave}
-                            disabled={!hasChanges && !isDirty}
-                            className={`flex items-center gap-2 px-6 py-2 rounded-lg font-bold transition-all ${hasChanges || isDirty
+                            disabled={!hasChanges}
+                            className={`flex items-center gap-2 px-6 py-2 rounded-lg font-bold transition-all ${hasChanges
                                 ? 'bg-blue-600 text-white shadow-md hover:bg-blue-700'
                                 : 'bg-stone-200 text-stone-400 cursor-not-allowed'
                                 }`}

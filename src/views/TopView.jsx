@@ -20,16 +20,11 @@ const TopView = () => {
             <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-0">
                 {/* Hero Image Background */}
                 <div
-                    className="absolute inset-0 w-full h-full bg-cover bg-center bg-no-repeat transition-opacity duration-1000"
-                    style={{ backgroundImage: "url('/images/hero-welfare.png')" }}
+                    className="absolute inset-0 w-full h-full bg-cover bg-center bg-no-repeat"
+                    style={{ backgroundImage: "url('/images/hero-image.png')" }}
                 />
 
-                {/* Overlay Gradient for readability - Very light opacity for maximum visibility */}
-                <div className="absolute inset-0 bg-gradient-to-b from-white/40 via-white/20 to-stone-50/60" />
 
-                {/* Abstract Blobs - Reduced opacity */}
-                <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-orange-100/30 rounded-full blur-[100px] mix-blend-multiply" />
-                <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-green-100/30 rounded-full blur-[100px] mix-blend-multiply" />
             </div>
 
             <motion.div
