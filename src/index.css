@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  @media print {
+    body {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+  }
+
+  /* ページごとの背景設定（画像がない場合はグラデーション） */
+  .bg-app-top {
+    background-color: #f5f5f4; /* stone-50 */
+    background-image: url('/images/top-bg.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+  .bg-app-dashboard {
+    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+    background-image: url('/images/dashboard-bg.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+  .bg-app-history {
+    background: linear-gradient(135deg, #fdf4ff 0%, #fae8ff 100%);
+    background-image: url('/images/history-bg.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+  .bg-app-master {
+    background: linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%);
+    background-image: url('/images/admin-bg.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+  .bg-app-shift {
+    background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+    background-image: url('/images/shift-bg.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+  .bg-app-admin {
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    background-image: url('/images/admin-bg.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+}
