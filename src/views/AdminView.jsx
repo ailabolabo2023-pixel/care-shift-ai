@@ -99,7 +99,7 @@ const AdminView = ({ setMainTab }) => {
     };
 
     return (
-        <div className="max-w-7xl mx-auto space-y-6">
+        <div className="max-w-[1700px] mx-auto px-2 space-y-6">
             <div className="flex flex-wrap gap-2 border-b border-stone-200 pb-1 justify-between items-end">
                 <div className="flex gap-2">
                     {tabs.map(tab => (
