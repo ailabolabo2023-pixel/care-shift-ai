@@ -54,7 +54,8 @@ export const DataProvider = ({ children }) => {
                 if (parsed.shiftTable) setShiftTable(parsed.shiftTable);
                 if (parsed.dates) setDates(parsed.dates);
                 if (parsed.logs) setLogs(parsed.logs);
-                if (parsed.viewMode) setViewMode(parsed.viewMode);
+                // viewMode は復元しない：開いたときは必ずトップ画面から始める
+                // （データ自体は保持され、トップから「職員登録へ／シフト管理へ」で入る）
                 if (parsed.monthlySettings) setMonthlySettings(parsed.monthlySettings);
             } catch (e) {
                 console.error("Failed to load saved data", e);
