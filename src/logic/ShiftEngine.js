@@ -473,43 +473,44 @@ export class ShiftEngine {
             });
 
             // 2. Adjust for Holidays (Monthly Limit)
-            // Date-bounded trainees are only in training for that period; monthly holiday balancing is handled by normal staff logic outside it.
-            if (this.hasTrainingPeriod(staff)) return;
+            // 日付付き研修生（研修開始日/終了日あり）は休数の調整を通常ロジックに任せるためスキップ。
+            // ※ただし連勤チェック（下の手順3）は全研修生に必ず適用する。
+            if (!this.hasTrainingPeriod(staff)) {
+                let currentRest = 0;
+                this.dates.forEach(d => {
+                    if (staff.shifts[d] === '公' || staff.shifts[d] === '休') currentRest++;
+                });
 
-            let currentRest = 0;
-            this.dates.forEach(d => {
-                if (staff.shifts[d] === '公' || staff.shifts[d] === '休') currentRest++;
-            });
+                let requiredRest = this.monthlySettings.monthlyHoliday || 9;
+                const parsedLimit = this.getStaffLimit(staff, ['公休数'], -1);
+                if (parsedLimit !== -1) requiredRest = parsedLimit;
 
-            let requiredRest = this.monthlySettings.monthlyHoliday || 9;
-            const parsedLimit = this.getStaffLimit(staff, ['公休数'], -1);
-            if (parsedLimit !== -1) requiredRest = parsedLimit;
+                let diff = requiredRest - currentRest; // Positive = Need more Rest
 
-            let diff = requiredRest - currentRest; // Positive = Need more Rest
+                this.log(`  -> Rest Target: ${requiredRest}, Current: ${currentRest}, Need: ${diff}`);
 
-            this.log(`  -> Rest Target: ${requiredRest}, Current: ${currentRest}, Need: ${diff}`);
+                if (diff > 0) {
+                    // Need to insert '休'
+                    const candidates = this.dates.filter(d =>
+                        staff.shifts[d].startsWith('研修') &&
+                        !staff.shiftMeta[d].isPreference
+                    );
 
-            if (diff > 0) {
-                // Need to insert '休'
-                const candidates = this.dates.filter(d =>
-                    staff.shifts[d].startsWith('研修') &&
-                    !staff.shiftMeta[d].isPreference
-                );
+                    // Shuffle
+                    for (let i = candidates.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+                    }
 
-                // Shuffle
-                for (let i = candidates.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
-                }
-
-                for (let k = 0; k < diff && k < candidates.length; k++) {
-                    const d = candidates[k];
-                    staff.shifts[d] = '休';
-                    staff.shiftMeta[d].isLocked = true;
+                    for (let k = 0; k < diff && k < candidates.length; k++) {
+                        const d = candidates[k];
+                        staff.shifts[d] = '休';
+                        staff.shiftMeta[d].isLocked = true;
+                    }
                 }
             }
 
-            // 3. Validate and Fix Constraints (Safe Loop)
+            // 3. Validate and Fix Constraints (Safe Loop) — 連勤(最大4)チェックは全研修生に適用
             // Constraints:
             // a. Late -> Early Forbidden
             // b. Max 5 Consecutive Work Days
