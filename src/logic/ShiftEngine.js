@@ -151,6 +151,20 @@ export class ShiftEngine {
         return this.dates.filter(date => !this.isBeforeEmployment(staff, date));
     }
 
+    /**
+     * その月に必要な公休数を返す。
+     * 月途中入職者（入職日あり）は在籍日数で日割り按分（四捨五入）。
+     * 入職日が無ければ基準値（公休数 or 月公休 or 9）をそのまま返す。
+     * すべての公休調整ステップはこの値を使い、按分のズレを防ぐ。
+     */
+    getRequiredRest(staff) {
+        const base = parseInt(staff['公休数'], 10) || this.monthlySettings.monthlyHoliday || 9;
+        const total = this.dates.length;
+        if (!total || !this.normalizeOptionalDate(staff['入職日'])) return base;
+        const availableDays = this.getAvailableDates(staff).length;
+        return Math.round(base * (availableDays / total));
+    }
+
     isNightTrainingPending(staff) {
         const status = String(staff['夜勤研修'] || '').trim();
         return status === '未';
@@ -309,11 +323,8 @@ export class ShiftEngine {
         // Only if we are trying to assign a WORK shift AND staff is NOT Exclusive
         if (!this.isStaffExclusive(staff) && ["早", "日", "遅", "夜", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(shift)) {
             // Calculate limit
-            const holiday = parseInt(staff['公休数'], 10) || this.monthlySettings.monthlyHoliday || 9;
             const availableDays = this.getAvailableDates(staff).length;
-            const holidayTarget = this.normalizeOptionalDate(staff['入職日'])
-                ? Math.round(holiday * (availableDays / this.dates.length))
-                : holiday;
+            const holidayTarget = this.getRequiredRest(staff);
             const limit = Math.max(0, availableDays - holidayTarget);
 
             // Count current work days
@@ -481,9 +492,7 @@ export class ShiftEngine {
                     if (staff.shifts[d] === '公' || staff.shifts[d] === '休') currentRest++;
                 });
 
-                let requiredRest = this.monthlySettings.monthlyHoliday || 9;
-                const parsedLimit = this.getStaffLimit(staff, ['公休数'], -1);
-                if (parsedLimit !== -1) requiredRest = parsedLimit;
+                let requiredRest = this.getRequiredRest(staff);
 
                 let diff = requiredRest - currentRest; // Positive = Need more Rest
 
@@ -990,13 +999,7 @@ export class ShiftEngine {
                         }
                     });
 
-                    let requiredRest = 0;
-                    if (staff['公休数']) {
-                        requiredRest = parseInt(staff['公休数'], 10);
-                    } else {
-                        // Default to monthly holiday setting or 9
-                        requiredRest = this.monthlySettings.monthlyHoliday || 9;
-                    }
+                    let requiredRest = this.getRequiredRest(staff);
 
                     this.log(`[Role Check] Staff: ${staff.name}, CurrentRest: ${currentRestCount}, Required: ${requiredRest}`);
 
@@ -1124,9 +1127,7 @@ export class ShiftEngine {
             });
 
             // Use robust parsing for Public Holidays
-            let requiredRest = this.monthlySettings.monthlyHoliday || 9;
-            const parsedLimit = this.getStaffLimit(staff, ['公休数'], -1);
-            if (parsedLimit !== -1) requiredRest = parsedLimit;
+            const requiredRest = this.getRequiredRest(staff);
 
             const diff = requiredRest - currentRest; // Positive = Shortage, Negative = Excess
 
@@ -1353,7 +1354,7 @@ export class ShiftEngine {
             // --- Adjustment for Full-Time Exclusive Staff (Weekly Days = 5) ---
             // Ensure their total holiday count matches the monthly requirement to remove yellow warnings.
             if (parseInt(staff['勤務日数/週'], 10) === 5) {
-                const requiredRest = parseInt(staff['公休数'], 10) || this.monthlySettings.monthlyHoliday || 9;
+                const requiredRest = this.getRequiredRest(staff);
 
                 let loopGuard = 0;
                 while (loopGuard < 20) {
@@ -1761,11 +1762,8 @@ export class ShiftEngine {
             if (workDays > 0) {
                 targetWork = Math.floor((availableDays / 7) * workDays);
             } else {
-                // Fallback: Holiday count
-                const requiredRest = parseIntSafe(staff['公休数']) || this.monthlySettings.monthlyHoliday || 9;
-                const restTarget = this.normalizeOptionalDate(staff['入職日'])
-                    ? Math.round(requiredRest * (availableDays / this.dates.length))
-                    : requiredRest;
+                // Fallback: Holiday count（日割り按分は getRequiredRest に統一）
+                const restTarget = this.getRequiredRest(staff);
                 targetWork = Math.max(0, availableDays - restTarget);
             }
 
@@ -1826,11 +1824,13 @@ export class ShiftEngine {
         const calculateStats = () => {
             const stats = [];
             this.shiftTable.forEach(s => {
+                const availableDays = this.getAvailableDates(s).length;
                 let target = 0;
                 if (s['勤務日数/週'] && parseInt(s['勤務日数/週'], 10) > 0) {
-                    target = Math.floor((this.dates.length / 7) * parseInt(s['勤務日数/週'], 10));
+                    target = Math.floor((availableDays / 7) * parseInt(s['勤務日数/週'], 10));
                 } else {
-                    target = this.dates.length - (parseInt(s['公休数'], 10) || this.monthlySettings.monthlyHoliday || 9);
+                    // 在籍日数 − 按分公休（月途中入職に対応）
+                    target = availableDays - this.getRequiredRest(s);
                 }
                 let current = 0;
                 this.dates.forEach(d => {
@@ -1952,7 +1952,7 @@ export class ShiftEngine {
         this.shiftTable.forEach(staff => {
             if (!this.isTraineeStaff(staff) || this.hasTrainingPeriod(staff)) return;
 
-            const requiredRest = parseInt(staff['公休数'], 10) || this.monthlySettings.monthlyHoliday || 9;
+            const requiredRest = this.getRequiredRest(staff);
 
             // Loop until fixed (max 10 iterations)
             for (let i = 0; i < 10; i++) {
@@ -2088,7 +2088,7 @@ export class ShiftEngine {
             const staffWithDiff = this.shiftTable.map(staff => {
                 if (chiefs.includes(staff)) return { staff, diff: 0 };
 
-                const requiredRest = parseInt(staff['公休数'], 10) || this.monthlySettings.monthlyHoliday || 9;
+                const requiredRest = this.getRequiredRest(staff);
                 let currentRest = 0;
                 this.dates.forEach(d => {
                     if (staff.shifts[d] === '公' || staff.shifts[d] === '休') currentRest++;
