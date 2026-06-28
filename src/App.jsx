@@ -13,7 +13,7 @@ const MainApp = () => {
   const {
     viewMode, setViewMode, excelData, targetDate, setTargetDate,
     shiftTable, setShiftTable, logs, setLogs,
-    dates, setDates, monthlySettings, updateSheetData
+    dates, setDates, monthlySettings, updateSheetData, facilityName
   } = useData();
 
   // Data Migration Logic (Old Key -> New Key)
@@ -40,6 +40,15 @@ const MainApp = () => {
 
   const [activeTab, setActiveTab] = React.useState("shift"); // 'shift', 'master', 'history'
 
+  React.useEffect(() => {
+    if (viewMode === 'master') {
+      setActiveTab('master');
+    }
+    if (viewMode === 'shift') {
+      setActiveTab('shift');
+    }
+  }, [viewMode]);
+
   // Handle manual shift change
   const handleCellChange = (rowIndex, date, value) => {
     const newTable = [...shiftTable];
@@ -53,6 +62,11 @@ const MainApp = () => {
 
   const handleGenerate = async () => {
     if (!excelData || !targetDate) return;
+    if (!excelData['マスタ'] || excelData['マスタ'].length === 0) {
+      alert('先に管理設定で職員を登録してください。');
+      setActiveTab('master');
+      return;
+    }
 
     // Use targetDate (YYYY-MM)
     // Prepare data with monthly preferences
@@ -139,6 +153,11 @@ const MainApp = () => {
               <span className="text-lg font-normal text-stone-400 ml-2">
                 {targetDate}
               </span>
+              {facilityName && (
+                <span className="text-sm font-bold text-orange-600 bg-orange-50 border border-orange-100 rounded-full px-3 py-1 ml-2">
+                  {facilityName}
+                </span>
+              )}
             </h1>
           </div>
 
@@ -243,7 +262,7 @@ const MainApp = () => {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
-              <AdminView />
+              <AdminView setMainTab={setActiveTab} />
             </motion.div>
           ) : activeTab === 'history' ? (
             <motion.div

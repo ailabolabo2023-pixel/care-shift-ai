@@ -10,9 +10,11 @@ const StaffTable = ({ data, onUpdate }) => {
     const dragItem = useRef(null);
     const dragOverItem = useRef(null);
     const [isDragging, setIsDragging] = useState(false);
+    const [draggingIndex, setDraggingIndex] = useState(null);
 
     useEffect(() => {
         if (data) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setLocalData(data);
         }
     }, [data]);
@@ -46,6 +48,10 @@ const StaffTable = ({ data, onUpdate }) => {
             '事務員': '',
             '管理者': '',
             '研修生': '',
+            '入職日': '',
+            '研修開始日': '',
+            '研修終了日': '',
+            '夜勤研修': '',
             '曜日固定': ''
         };
         setLocalData([...localData, newStaff]);
@@ -63,6 +69,7 @@ const StaffTable = ({ data, onUpdate }) => {
     // Drag Handlers
     const handleDragStart = (e, position) => {
         dragItem.current = position;
+        setDraggingIndex(position);
         setIsDragging(true);
         // e.dataTransfer.effectAllowed = "move"; // Optional visual tweak
     };
@@ -82,6 +89,7 @@ const StaffTable = ({ data, onUpdate }) => {
         newData.splice(dragOverIndex, 0, draggedItemContent);
 
         dragItem.current = dragOverIndex;
+        setDraggingIndex(dragOverIndex);
         setLocalData(newData);
         setHasChanges(true);
     };
@@ -89,6 +97,7 @@ const StaffTable = ({ data, onUpdate }) => {
     const handleDragEnd = () => {
         dragItem.current = null;
         dragOverItem.current = null;
+        setDraggingIndex(null);
         setIsDragging(false);
     };
 
@@ -140,6 +149,10 @@ const StaffTable = ({ data, onUpdate }) => {
                             <th className="px-3 py-3 text-left font-bold text-stone-600 min-w-[120px]">氏名</th>
                             <th className="px-2 py-3 text-center font-bold text-stone-600 w-20">日数/週</th>
                             <th className="px-2 py-3 text-center font-bold text-stone-600 w-20">夜勤/週</th>
+                            <th className="px-3 py-3 text-left font-bold text-stone-600 min-w-[135px]">入職日</th>
+                            <th className="px-3 py-3 text-left font-bold text-stone-600 min-w-[135px]">研修開始</th>
+                            <th className="px-3 py-3 text-left font-bold text-stone-600 min-w-[135px]">研修終了</th>
+                            <th className="px-3 py-3 text-center font-bold text-stone-600 min-w-[105px]">夜勤研修</th>
                             <th className="px-2 py-3 text-center font-bold text-stone-600 w-16 bg-orange-50">早可</th>
                             <th className="px-2 py-3 text-center font-bold text-stone-600 w-16 bg-green-50">日可</th>
                             <th className="px-2 py-3 text-center font-bold text-stone-600 w-16 bg-blue-50">遅可</th>
@@ -159,7 +172,7 @@ const StaffTable = ({ data, onUpdate }) => {
                         {localData.map((row, i) => (
                             <tr
                                 key={i}
-                                className={`group hover:bg-stone-50 transition-colors ${isDragging && dragItem.current === i ? 'bg-blue-50 opacity-50' : ''}`}
+                                className={`group hover:bg-stone-50 transition-colors ${isDragging && draggingIndex === i ? 'bg-blue-50 opacity-50' : ''}`}
                                 draggable
                                 onDragStart={(e) => handleDragStart(e, i)}
                                 onDragEnter={(e) => handleDragEnter(e, i)}
@@ -193,6 +206,27 @@ const StaffTable = ({ data, onUpdate }) => {
                                         onChange={(e) => handleCellChange(i, '夜勤回数/週', e.target.value)}
                                         className="w-full text-center px-1 py-1 border border-transparent hover:border-stone-300 focus:border-blue-400 rounded bg-transparent outline-none"
                                     />
+                                </td>
+                                {['入職日', '研修開始日', '研修終了日'].map(field => (
+                                    <td key={field} className="p-2">
+                                        <input
+                                            type="date"
+                                            value={row[field] || ''}
+                                            onChange={(e) => handleCellChange(i, field, e.target.value)}
+                                            className="w-full px-2 py-1 border border-transparent hover:border-stone-300 focus:border-blue-400 rounded bg-transparent outline-none text-xs"
+                                        />
+                                    </td>
+                                ))}
+                                <td className="p-2">
+                                    <select
+                                        value={row['夜勤研修'] || ''}
+                                        onChange={(e) => handleCellChange(i, '夜勤研修', e.target.value)}
+                                        className="w-full px-2 py-1 border border-transparent hover:border-stone-300 focus:border-blue-400 rounded bg-transparent outline-none text-xs"
+                                    >
+                                        <option value="">対象外</option>
+                                        <option value="未">未</option>
+                                        <option value="済">済</option>
+                                    </select>
                                 </td>
                                 {/* Updated boolean-like fields to include '管理者' */}
                                 {['早可', '日可', '遅可', '夜可', '専属', 'サ責', '主任', '施設長', '事務員', '管理者', '研修生'].map(field => {

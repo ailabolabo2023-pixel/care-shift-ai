@@ -1,4 +1,5 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
+import { syncStaffToForm } from '../utils/staffSync';
 
 const DataContext = createContext();
 
@@ -8,6 +9,7 @@ export const DataProvider = ({ children }) => {
     // Persistent Data
     const [excelData, setExcelData] = useState(null); // { master, requirements, etc. }
     const [fileName, setFileName] = useState("");
+    const [facilityName, setFacilityName] = useState("");
 
     // Session Data
     const [targetDate, setTargetDate] = useState(""); // "YYYY-MM"
@@ -44,6 +46,7 @@ export const DataProvider = ({ children }) => {
             try {
                 const parsed = JSON.parse(savedData);
                 setExcelData(parsed.excelData);
+                setFacilityName(parsed.facilityName || parsed.excelData?.facilityName || parsed.fileName || "");
                 setFileName(parsed.fileName || "シフト①");
 
                 // Restore session state
@@ -65,6 +68,7 @@ export const DataProvider = ({ children }) => {
             localStorage.setItem("care_shift_ai_data", JSON.stringify({
                 excelData,
                 fileName,
+                facilityName,
                 targetDate,
                 shiftTable,
                 dates,
@@ -73,11 +77,12 @@ export const DataProvider = ({ children }) => {
                 monthlySettings
             }));
         }
-    }, [excelData, fileName, targetDate, shiftTable, dates, logs, viewMode, monthlySettings]);
+    }, [excelData, fileName, facilityName, targetDate, shiftTable, dates, logs, viewMode, monthlySettings]);
 
     const clearData = () => {
         setExcelData(null);
         setFileName("");
+        setFacilityName("");
         setShiftTable([]);
         setDates([]);
         setTargetDate("");
@@ -91,6 +96,39 @@ export const DataProvider = ({ children }) => {
             ...prev,
             [sheetName]: newData
         }));
+        // スタッフを保存したら、スマホ入力ページの氏名プルダウンへ自動反映
+        if (sheetName === 'マスタ') {
+            syncStaffToForm(newData);
+        }
+    };
+
+    const createFacility = (name) => {
+        const cleanName = name.trim();
+        if (!cleanName) return false;
+
+        setFacilityName(cleanName);
+        setFileName(cleanName);
+        setExcelData({
+            facilityName: cleanName,
+            'マスタ': [],
+            '要員数': [],
+            '希望': [],
+            '繰越': []
+        });
+        setShiftTable([]);
+        setDates([]);
+        setLogs([]);
+        return true;
+    };
+
+    const renameFacility = (name) => {
+        const cleanName = name.trim();
+        if (!cleanName) return false;
+
+        setFacilityName(cleanName);
+        setFileName(cleanName);
+        setExcelData(prev => prev ? { ...prev, facilityName: cleanName } : prev);
+        return true;
     };
 
     const updateMonthlySettings = (month, newSettings) => {
@@ -105,6 +143,7 @@ export const DataProvider = ({ children }) => {
         const backupData = {
             excelData,
             fileName,
+            facilityName,
             targetDate,
             shiftTable,
             dates,
@@ -120,6 +159,7 @@ export const DataProvider = ({ children }) => {
     const value = {
         excelData, setExcelData,
         fileName, setFileName,
+        facilityName, setFacilityName,
         targetDate, setTargetDate,
         shiftTable, setShiftTable,
         dates, setDates,
@@ -128,6 +168,8 @@ export const DataProvider = ({ children }) => {
         monthlySettings, updateMonthlySettings,
         clearData,
         updateSheetData,
+        createFacility,
+        renameFacility,
         saveBackup
     };
 

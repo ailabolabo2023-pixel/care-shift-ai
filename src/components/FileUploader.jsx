@@ -5,7 +5,7 @@ import { Upload, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const FileUploader = () => {
-    const { setExcelData, setFileName } = useData();
+    const { setExcelData, setFileName, setFacilityName } = useData();
     const [status, setStatus] = React.useState("idle"); // idle, loading, success, error
     const [message, setMessage] = React.useState("");
 
@@ -26,8 +26,10 @@ const FileUploader = () => {
                 return;
             }
 
-            setExcelData(data);
+            const facilityName = file.name.replace(/\.(xlsx|xls)$/i, '');
+            setExcelData({ ...data, facilityName });
             setFileName(file.name);
+            setFacilityName(facilityName);
             setStatus("success");
             setMessage("読み込み完了！");
         } catch (error) {
@@ -35,7 +37,7 @@ const FileUploader = () => {
             setStatus("error");
             setMessage("ファイルの読み込みに失敗しました。");
         }
-    }, [setExcelData, setFileName]);
+    }, [setExcelData, setFileName, setFacilityName]);
 
     return (
         <div className="w-full">

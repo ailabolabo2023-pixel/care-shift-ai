@@ -1,140 +1,196 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useData } from '../context/DataContext';
 import FileUploader from '../components/FileUploader';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Calendar, Upload, ArrowRight, HeartHandshake, BookOpen } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { ArrowRight, BookOpen, Building2, Calendar, ClipboardList, Upload, Users } from 'lucide-react';
 
 const TopView = () => {
-    const { excelData, fileName, setTargetDate, setViewMode, clearData } = useData();
-    const [inputDate, setInputDate] = useState("");
+    const {
+        excelData,
+        fileName,
+        facilityName,
+        createFacility,
+        renameFacility,
+        setTargetDate,
+        setViewMode,
+        clearData
+    } = useData();
 
-    const handleDateSubmit = () => {
+    const [facilityInput, setFacilityInput] = useState(facilityName || fileName || '');
+    const [inputDate, setInputDate] = useState(new Date().toISOString().slice(0, 7));
+
+    useEffect(() => {
+        setFacilityInput(facilityName || fileName || '');
+    }, [facilityName, fileName]);
+
+    const staffCount = excelData?.['マスタ']?.length || 0;
+    const registeredName = facilityName || excelData?.facilityName || fileName || '';
+
+    const handleFacilitySubmit = (event) => {
+        event.preventDefault();
+        if (!facilityInput.trim()) return;
+
+        if (excelData) {
+            renameFacility(facilityInput);
+        } else {
+            createFacility(facilityInput);
+        }
+    };
+
+    const moveToStaffSettings = () => {
+        if (!excelData && facilityInput.trim()) {
+            createFacility(facilityInput);
+        }
+        if (inputDate) setTargetDate(inputDate);
+        setViewMode('master');
+    };
+
+    const moveToShift = () => {
         if (!inputDate) return;
         setTargetDate(inputDate);
-        setViewMode("shift"); // Proceed to main shift view
+        setViewMode('shift');
     };
 
     return (
         <div className="min-h-screen bg-stone-50 flex flex-col items-center justify-center p-6 font-sans text-stone-700 relative overflow-hidden">
-            {/* Background Decor */}
-            <div className="absolute top-0 left-0 w-full h-full pointer-events-none z-0">
-                {/* Hero Image Background */}
+            <div className="absolute inset-0 pointer-events-none z-0">
                 <div
                     className="absolute inset-0 w-full h-full bg-cover bg-center bg-no-repeat"
                     style={{ backgroundImage: "url('/images/hero-welfare.png')" }}
                 />
-
-
+                <div className="absolute inset-0 bg-white/35" />
             </div>
 
             <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.8 }}
-                className="z-10 w-full max-w-2xl text-center space-y-8"
+                transition={{ duration: 0.5 }}
+                className="z-10 w-full max-w-4xl space-y-6"
             >
-                <div>
-                    <motion.div
-                        initial={{ scale: 0.9 }}
-                        animate={{ scale: 1 }}
-                        transition={{ duration: 0.5, delay: 0.2 }}
-                        className="inline-flex items-center justify-center p-4 bg-white/80 backdrop-blur-sm rounded-full shadow-sm mb-6"
-                    >
-                        <HeartHandshake className="w-10 h-10 text-orange-400 mr-3" />
-                        <h1 className="text-3xl font-bold tracking-tight text-stone-800 drop-shadow-sm">
+                <div className="text-center">
+                    <div className="inline-flex items-center justify-center p-4 bg-white/85 backdrop-blur-sm rounded-full shadow-sm mb-5">
+                        <Building2 className="w-10 h-10 text-orange-500 mr-3" />
+                        <h1 className="text-3xl font-bold tracking-tight text-stone-800">
                             Care Shift AI <span className="text-lg font-normal text-stone-600 ml-2">for Welfare</span>
                         </h1>
-                    </motion.div>
-                    <p className="text-lg font-bold text-stone-800 max-w-lg mx-auto leading-relaxed drop-shadow-md bg-white/30 backdrop-blur-[1px] rounded-lg py-2 px-4 shadow-sm inline-block">
-                        「公正性」と「効率」を両立するシフト作成。<br />
-                        生まれた時間を、利用者のケアとスタッフに寄り添う時間へ。
+                    </div>
+                    <p className="text-base font-bold text-stone-700 bg-white/70 backdrop-blur-sm rounded-full py-2 px-5 shadow-sm inline-block">
+                        施設名と職員データを登録して、Excelなしでシフトを作成します。
                     </p>
                 </div>
 
-                <div className="bg-white/60 backdrop-blur-md rounded-3xl p-8 shadow-xl border border-white/50">
-                    <AnimatePresence mode="wait">
-                        {!excelData ? (
-                            <motion.div
-                                key="upload"
-                                initial={{ opacity: 0, x: -20 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                exit={{ opacity: 0, x: 20 }}
-                                className="space-y-6"
-                            >
-                                <div className="space-y-2">
-                                    <h2 className="text-xl font-semibold text-stone-800 flex items-center justify-center gap-2">
-                                        <Upload className="w-5 h-5 text-green-600" />
-                                        データ読み込み
-                                    </h2>
-                                    <p className="text-sm text-stone-500">
-                                        「原田南２号館...xlsx」などのシフト管理ファイルをアップロードしてください。<br />
-                                        一度読み込むと、次回からは自動的に復元されます。
-                                    </p>
+                <div className="bg-white/80 backdrop-blur-md rounded-3xl p-7 shadow-xl border border-white/60">
+                    <div className="grid gap-6 lg:grid-cols-[1fr_1.1fr]">
+                        <section className="space-y-4">
+                            <div className="flex items-center gap-2">
+                                <Building2 className="w-5 h-5 text-orange-500" />
+                                <h2 className="text-xl font-bold text-stone-800">施設登録</h2>
+                            </div>
+
+                            <form onSubmit={handleFacilitySubmit} className="space-y-3">
+                                <label className="block text-sm font-bold text-stone-600">
+                                    施設名
+                                </label>
+                                <input
+                                    type="text"
+                                    value={facilityInput}
+                                    onChange={(event) => setFacilityInput(event.target.value)}
+                                    className="w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-lg font-bold text-stone-800 outline-none transition-all focus:border-orange-300 focus:ring-4 focus:ring-orange-100"
+                                    placeholder="例：原田南2号館"
+                                />
+                                <button
+                                    type="submit"
+                                    disabled={!facilityInput.trim()}
+                                    className={`w-full rounded-xl px-4 py-3 font-bold transition-all ${facilityInput.trim()
+                                        ? 'bg-orange-500 text-white shadow-md hover:bg-orange-600'
+                                        : 'bg-stone-200 text-stone-400 cursor-not-allowed'
+                                        }`}
+                                >
+                                    {excelData ? '施設名を更新' : 'この施設で始める'}
+                                </button>
+                            </form>
+
+                            {excelData && (
+                                <div className="rounded-2xl border border-green-100 bg-green-50 px-4 py-3">
+                                    <p className="text-xs font-bold text-green-700">登録施設</p>
+                                    <p className="mt-1 text-lg font-bold text-green-900 truncate">{registeredName}</p>
+                                    <p className="mt-1 text-sm text-green-800">登録職員：{staffCount}名</p>
                                 </div>
-                                <div className="max-w-md mx-auto">
-                                    <FileUploader />
-                                </div>
-                            </motion.div>
-                        ) : (
-                            <motion.div
-                                key="select"
-                                initial={{ opacity: 0, x: 20 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                exit={{ opacity: 0, x: -20 }}
-                                className="space-y-6"
-                            >
-                                <div className="space-y-2">
-                                    <h2 className="text-xl font-semibold text-stone-800 flex items-center justify-center gap-2">
-                                        <Calendar className="w-5 h-5 text-orange-500" />
-                                        作成月の選択
-                                    </h2>
-                                    <div className="flex items-center justify-center gap-2 bg-green-50 px-4 py-2 rounded-full w-fit mx-auto">
-                                        <span className="text-sm text-green-800 font-medium truncate max-w-[200px]">{fileName}</span>
-                                        <button
-                                            onClick={() => {
-                                                if (window.confirm("読み込んだデータを削除して変更しますか？")) {
-                                                    clearData();
-                                                }
-                                            }}
-                                            className="text-xs text-green-600 underline hover:text-green-800"
-                                        >
-                                            変更
-                                        </button>
-                                    </div>
-                                    <p className="text-sm text-stone-500 pt-2">
-                                        シフトを作成したい年月を入力してください（例: 2025-10）
-                                    </p>
+                            )}
+                        </section>
+
+                        <section className="space-y-4">
+                            <div className="flex items-center gap-2">
+                                <Calendar className="w-5 h-5 text-blue-500" />
+                                <h2 className="text-xl font-bold text-stone-800">作成月と操作</h2>
+                            </div>
+
+                            <div className="rounded-2xl border border-stone-200 bg-white/80 p-4 space-y-4">
+                                <div>
+                                    <label className="block text-sm font-bold text-stone-600 mb-2">
+                                        シフト作成月
+                                    </label>
+                                    <input
+                                        type="month"
+                                        value={inputDate}
+                                        onChange={(event) => setInputDate(event.target.value)}
+                                        className="w-full rounded-xl border-2 border-stone-200 bg-white px-4 py-3 text-xl font-bold text-stone-800 outline-none transition-all focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                                    />
                                 </div>
 
-                                <div className="flex flex-col items-center gap-4">
-                                    <div className="relative">
-                                        <input
-                                            type="month"
-                                            value={inputDate}
-                                            onChange={(e) => setInputDate(e.target.value)}
-                                            className="text-2xl font-bold text-center text-stone-700 bg-white border-2 border-stone-200 rounded-xl px-6 py-3 shadow-inner focus:outline-none focus:border-orange-300 focus:ring-4 focus:ring-orange-100 transition-all w-64"
-                                            placeholder="YYYY-MM"
-                                        />
-                                    </div>
-
-                                    <motion.button
-                                        whileHover={{ scale: 1.05 }}
-                                        whileTap={{ scale: 0.95 }}
-                                        onClick={handleDateSubmit}
-                                        disabled={!inputDate}
-                                        className={`flex items-center gap-2 px-8 py-4 rounded-full font-bold text-lg shadow-lg transition-all
-                                            ${inputDate
-                                                ? "bg-gradient-to-r from-orange-400 to-pink-500 text-white shadow-orange-200"
-                                                : "bg-stone-200 text-stone-400 cursor-not-allowed"
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <button
+                                        onClick={moveToStaffSettings}
+                                        disabled={!excelData && !facilityInput.trim()}
+                                        className={`flex items-center justify-center gap-2 rounded-xl px-4 py-3 font-bold transition-all ${excelData || facilityInput.trim()
+                                            ? 'bg-stone-800 text-white shadow-md hover:bg-stone-900'
+                                            : 'bg-stone-200 text-stone-400 cursor-not-allowed'
                                             }`}
                                     >
-                                        シフト管理へ進む
-                                        <ArrowRight className="w-5 h-5" />
-                                    </motion.button>
+                                        <Users className="w-5 h-5" />
+                                        職員登録へ
+                                    </button>
+                                    <button
+                                        onClick={moveToShift}
+                                        disabled={!excelData || !inputDate}
+                                        className={`flex items-center justify-center gap-2 rounded-xl px-4 py-3 font-bold transition-all ${excelData && inputDate
+                                            ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md hover:shadow-lg'
+                                            : 'bg-stone-200 text-stone-400 cursor-not-allowed'
+                                            }`}
+                                    >
+                                        <ClipboardList className="w-5 h-5" />
+                                        シフト管理へ
+                                        <ArrowRight className="w-4 h-4" />
+                                    </button>
                                 </div>
-                            </motion.div>
-                        )}
-                    </AnimatePresence>
+                            </div>
+
+                            {excelData && (
+                                <button
+                                    onClick={() => {
+                                        if (window.confirm('登録施設と入力データを削除して、最初からやり直しますか？')) {
+                                            clearData();
+                                        }
+                                    }}
+                                    className="text-sm font-bold text-stone-500 underline hover:text-red-600"
+                                >
+                                    登録データを削除してやり直す
+                                </button>
+                            )}
+                        </section>
+                    </div>
+
+                    {!excelData && (
+                        <details className="mt-6 rounded-2xl border border-stone-200 bg-white/70 p-4">
+                            <summary className="cursor-pointer text-sm font-bold text-stone-600 flex items-center gap-2">
+                                <Upload className="w-4 h-4" />
+                                既存のExcelファイルから移行する
+                            </summary>
+                            <div className="mt-4 max-w-md">
+                                <FileUploader />
+                            </div>
+                        </details>
+                    )}
                 </div>
             </motion.div>
 
@@ -143,17 +199,17 @@ const TopView = () => {
                     href="/manual.pdf"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-2 px-4 py-2 bg-white/80 backdrop-blur-md rounded-full shadow-sm text-stone-600 font-medium hover:bg-white hover:text-orange-500 transition-colors"
+                    className="flex items-center gap-2 px-4 py-2 bg-white/85 backdrop-blur-md rounded-full shadow-sm text-stone-600 font-medium hover:bg-white hover:text-orange-500 transition-colors"
                 >
                     <BookOpen className="w-5 h-5" />
                     使用ガイド
                 </a>
             </div>
 
-            <footer className="absolute bottom-4 text-stone-400 text-xs text-center w-full">
+            <footer className="absolute bottom-4 text-stone-500 text-xs text-center w-full">
                 &copy; Care Shift AI - Welfare Edition
             </footer>
-        </div >
+        </div>
     );
 };
 

@@ -56,7 +56,7 @@ export class ShiftEngine {
 
         const str = s.toString().trim();
         // Try standard format YYYY/MM/DD or YYYY-MM-DD
-        let m = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+        let m = str.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
         if (m) {
             const y = m[1];
             const mo = ("0" + m[2]).slice(-2);
@@ -65,7 +65,7 @@ export class ShiftEngine {
         }
 
         // Try MD format (10/1) - Assume target year
-        m = str.match(/^(\d{1,2})[\/\-](\d{1,2})$/);
+        m = str.match(/^(\d{1,2})[/-](\d{1,2})$/);
         if (m) {
             const [targetY] = this.targetYm.split('-');
             const mo = ("0" + m[1]).slice(-2);
@@ -108,6 +108,74 @@ export class ShiftEngine {
         return this.logs;
     }
 
+    isTruthyMark(value) {
+        return value === true || value === 1 || value === '1' || value === 'TRUE' || value === '〇';
+    }
+
+    isUnavailableShift(value) {
+        return value === '__UNAVAILABLE__';
+    }
+
+    normalizeOptionalDate(value) {
+        if (!value) return null;
+        return this.normalizeDateStr(value);
+    }
+
+    hasTrainingPeriod(staff) {
+        return Boolean(this.normalizeOptionalDate(staff['研修開始日']) || this.normalizeOptionalDate(staff['研修終了日']));
+    }
+
+    isTraineeStaff(staff) {
+        return this.isTruthyMark(staff['研修生']);
+    }
+
+    isTrainingDate(staff, dateStr) {
+        if (!this.isTraineeStaff(staff)) return false;
+
+        const start = this.normalizeOptionalDate(staff['研修開始日']);
+        const end = this.normalizeOptionalDate(staff['研修終了日']);
+
+        // Backward-compatible behavior: a trainee without dates is trainee for the full month.
+        if (!start && !end) return true;
+        if (start && dateStr < start) return false;
+        if (end && dateStr > end) return false;
+        return true;
+    }
+
+    isBeforeEmployment(staff, dateStr) {
+        const start = this.normalizeOptionalDate(staff['入職日']);
+        return Boolean(start && dateStr < start);
+    }
+
+    getAvailableDates(staff) {
+        return this.dates.filter(date => !this.isBeforeEmployment(staff, date));
+    }
+
+    isNightTrainingPending(staff) {
+        const status = String(staff['夜勤研修'] || '').trim();
+        return status === '未';
+    }
+
+    isNightTrainingDone(staff) {
+        const status = String(staff['夜勤研修'] || '').trim();
+        return status === '済';
+    }
+
+    cleanupUnavailableShifts() {
+        this.shiftTable.forEach(staff => {
+            this.dates.forEach(date => {
+                if (this.isUnavailableShift(staff.shifts[date])) {
+                    staff.shifts[date] = "";
+                    staff.shiftMeta[date] = {
+                        ...(staff.shiftMeta[date] || {}),
+                        isLocked: true,
+                        isUnavailable: true
+                    };
+                }
+            });
+        });
+    }
+
     /**
      * Check if assigning a shift on `dateStr` would violate the max 5 consecutive work days rule.
      * Returns true if violated (i.e., do NOT assign).
@@ -116,52 +184,47 @@ export class ShiftEngine {
         const idx = this.dates.indexOf(dateStr);
         if (idx === -1) return false;
 
-        // We are checking if putting a work shift at 'idx' causes a violation.
-        // Violation = >5 consecutive "starts" (Work days).
-        // Ming does not count as a start, but if it bridges two work blocks...
-        // Actually, Ming usually follows Night.
-        // If we insert a Day at idx:
-        // Check backward streak of non-rest/non-empty?
+        // 役職者判定
+        const isManager = staff['サ責'] === true || staff['サ責'] === '〇' || staff['サ責'] === 'TRUE';
+        const isDirector = staff['施設長'] === true || staff['施設長'] === '〇' || staff['施設長'] === 'TRUE';
+        const isClerk = staff['事務員'] === true || staff['事務員'] === '〇' || staff['事務員'] === 'TRUE';
+        const isAdmin = staff['管理者'] === true || staff['管理者'] === '〇' || staff['管理者'] === 'TRUE';
+        const isChief = staff['主任'] === true || staff['主任'] === '〇' || staff['主任'] === 'TRUE';
+        const isRoleStaff = isManager || isDirector || isClerk || isAdmin || isChief;
 
-        const isWorkStart = (s) => ["早", "日", "遅", "夜", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s);
-        const isBridge = (s) => s === "明";
-        // Actually, for "5 days" rule, we usually count starts.
+        const maxConsecutive = isRoleStaff ? 5 : 4;
+
+        // 「明」「予」「研」も出勤扱いとしてカウントする
+        const isWork = (s) => ["早", "日", "遅", "夜", "明", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s);
 
         // Scan Backward
-        let backwardStarts = 0;
+        let backwardDays = 0;
         for (let k = 1; k <= 6; k++) {
             if (idx - k < 0) break;
             const s = staff.shifts[this.dates[idx - k]];
-            if (isWorkStart(s)) {
-                backwardStarts++;
-            } else if (isBridge(s)) {
-                // Ming doesn't reset streak, but doesn't add to start count?
-                // If pattern is N, M, D... the D is 2nd start (N is 1st).
-                // So Ming acts as transparent?
-                continue;
+            if (isWork(s)) {
+                backwardDays++;
             } else {
                 break;
             }
         }
 
         // Scan Forward
-        let forwardStarts = 0;
+        let forwardDays = 0;
         for (let k = 1; k <= 6; k++) {
             if (idx + k >= this.dates.length) break;
             const s = staff.shifts[this.dates[idx + k]];
-            if (isWorkStart(s)) {
-                forwardStarts++;
-            } else if (isBridge(s)) {
-                continue;
+            if (isWork(s)) {
+                forwardDays++;
             } else {
                 break;
             }
         }
 
         // Total if we add this shift (this shift counts as 1 start)
-        const totalStreak = backwardStarts + 1 + forwardStarts;
+        const totalStreak = backwardDays + 1 + forwardDays;
 
-        if (totalStreak > 5) return true; // 6 or more starts is NG
+        if (totalStreak > maxConsecutive) return true; // しきい値を超える連勤はNG
 
         return false;
     }
@@ -170,6 +233,22 @@ export class ShiftEngine {
     isShiftAllowed(staff, dateStr, shift) {
         const idx = this.dates.indexOf(dateStr);
         if (idx === -1) return false;
+
+        if (this.isBeforeEmployment(staff, dateStr) || this.isUnavailableShift(staff.shifts[dateStr])) {
+            return false;
+        }
+
+        const isTrainingShift = typeof shift === 'string' && shift.startsWith('研修');
+        if (this.isTrainingDate(staff, dateStr)) {
+            if (!isTrainingShift && shift !== '休') return false;
+        } else if (isTrainingShift) {
+            // Night training is allowed outside the daytime training period when explicitly pending.
+            if (!(shift === '研修（夜）' && this.isNightTrainingPending(staff))) return false;
+        }
+
+        if (shift === '夜' && this.isNightTrainingPending(staff)) {
+            return false;
+        }
 
         // If the cell is locked, no changes are allowed
         if (staff.shiftMeta[dateStr] && staff.shiftMeta[dateStr].isLocked) {
@@ -202,7 +281,7 @@ export class ShiftEngine {
         }
 
         // Check Weekly Work Limit (勤務日数/週) - STRICT ENFORCEMENT
-        if (["早", "日", "遅", "夜", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(shift)) {
+        if (["早", "日", "遅", "夜", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(shift)) {
             const limitPerWeek = this.getStaffLimit(staff, ['勤務日数/週', '日数/週', '勤務制限'], 0);
 
             if (limitPerWeek > 0) {
@@ -215,7 +294,7 @@ export class ShiftEngine {
                     const d = this.dates[i];
                     if (d === dateStr) continue;
                     const s = staff.shifts[d];
-                    if (["早", "日", "遅", "夜", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s)) {
+                    if (["早", "日", "遅", "夜", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s)) {
                         workInWeek++;
                     }
                 }
@@ -228,24 +307,28 @@ export class ShiftEngine {
 
         // Check Monthly Work Limit (公休数)
         // Only if we are trying to assign a WORK shift AND staff is NOT Exclusive
-        if (!this.isStaffExclusive(staff) && ["早", "日", "遅", "夜", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(shift)) {
+        if (!this.isStaffExclusive(staff) && ["早", "日", "遅", "夜", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(shift)) {
             // Calculate limit
             const holiday = parseInt(staff['公休数'], 10) || this.monthlySettings.monthlyHoliday || 9;
-            const limit = this.dates.length - holiday;
+            const availableDays = this.getAvailableDates(staff).length;
+            const holidayTarget = this.normalizeOptionalDate(staff['入職日'])
+                ? Math.round(holiday * (availableDays / this.dates.length))
+                : holiday;
+            const limit = Math.max(0, availableDays - holidayTarget);
 
             // Count current work days
             let currentWork = 0;
             this.dates.forEach(d => {
                 const s = staff.shifts[d];
                 // Count Ming as occupied day for holiday calculation logic
-                if (["早", "日", "遅", "夜", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s)) {
+                if (["早", "日", "遅", "夜", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s)) {
                     currentWork++;
                 }
             });
 
             // If we are replacing an empty slot (or non-work), and we are already at or above limit -> DENY
             const existing = staff.shifts[dateStr];
-            const isExistingWork = ["早", "日", "遅", "夜", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(existing);
+            const isExistingWork = ["早", "日", "遅", "夜", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(existing);
 
             if (!isExistingWork && currentWork >= limit) {
                 // Deny adding new work if limit reached
@@ -306,40 +389,6 @@ export class ShiftEngine {
         return true;
     }
 
-    // 夜勤の3点セット（夜→明→休）を適用する
-    applyNightShiftSet(staff, dateStr, isPreference = false) {
-        const idx = this.dates.indexOf(dateStr);
-        if (idx === -1) {
-            this.log(`Error: Cannot apply night shift set for ${staff.name} on ${dateStr} - date not found`);
-            return false;
-        }
-
-        const nextDate = this.dates[idx + 1];
-        const nextNextDate = this.dates[idx + 2];
-
-        // 3点セットを適用
-        staff.shifts[dateStr] = '夜';
-        staff.shiftMeta[dateStr].isLocked = true;
-        if (isPreference) staff.shiftMeta[dateStr].isPreference = true;
-
-        if (nextDate) {
-            staff.shifts[nextDate] = '明';
-            staff.shiftMeta[nextDate].isLocked = true;
-            if (isPreference) staff.shiftMeta[nextDate].isPreference = true;
-        }
-
-        if (nextNextDate) {
-            staff.shifts[nextNextDate] = '休';
-            staff.shiftMeta[nextNextDate].isLocked = true;
-            if (isPreference) staff.shiftMeta[nextNextDate].isPreference = true;
-        }
-
-        this.log(`Applied night shift set for ${staff.name}: ${dateStr}(夜) → ${nextDate || 'Next'}(明) → ${nextNextDate || 'Next'}(休)`);
-        return true;
-    }
-
-
-
     execute() {
         this.log(`Starting shift generation for ${this.targetYm}`);
 
@@ -348,6 +397,7 @@ export class ShiftEngine {
             this.step0_Initialize();
             this.step1_ApplyCarryOver();
             this.step2_ApplyPreferences();
+            this.step2_1_ApplyEmploymentAvailability();
             this.step2_5_ApplyFixedDays(); // New Step
             this.step2_7_ApplyRoleBasedFixedShifts(); // New Step: Role Exemptions
             this.step2_8_ForceAdjustRoleHolidays(); // New Step: Force Adjust Role Holidays
@@ -361,11 +411,13 @@ export class ShiftEngine {
             this.step8_ApplyDayShift();
             this.step8_2_ForceFillDeficits(); // New: Force fill shortages
             this.step4_5_ApplyTrainee(); // Moved: Trainees fill their own slots after regulars are done
+            this.step5_5_ApplyNightTraining();
             this.step8_5_BalanceWorkDays();
             this.step8_8_AdjustStaffCounts(); // New: Reduce excess staff
             this.step8_9_ForceAdjustTraineeHolidays(); // New: Trainee Holiday Final Check
             this.step9_5_ChiefAdjustment(); // New: Chief uses '予' to fill holes and adjust holidays
             this.step9_DistributeOffDays();
+            this.cleanupUnavailableShifts();
             this.step10_FinalizeValidation();
 
             this.log("All steps completed successfully.");
@@ -394,7 +446,7 @@ export class ShiftEngine {
 
         this.shiftTable.forEach(staff => {
             // Check if staff is '研修生'
-            const isTrainee = staff['研修生'] === true || staff['研修生'] === '〇' || staff['研修生'] === 'TRUE';
+            const isTrainee = this.isTraineeStaff(staff);
 
             if (!isTrainee) return;
 
@@ -411,6 +463,7 @@ export class ShiftEngine {
             if (trainingTypes.length === 0) trainingTypes.push('研修（日）');
 
             this.dates.forEach(date => {
+                if (!this.isTrainingDate(staff, date)) return;
                 // Skip if already filled (e.g. by Preferences or Previous Steps)
                 if (staff.shifts[date] !== "") return;
 
@@ -420,6 +473,9 @@ export class ShiftEngine {
             });
 
             // 2. Adjust for Holidays (Monthly Limit)
+            // Date-bounded trainees are only in training for that period; monthly holiday balancing is handled by normal staff logic outside it.
+            if (this.hasTrainingPeriod(staff)) return;
+
             let currentRest = 0;
             this.dates.forEach(d => {
                 if (staff.shifts[d] === '公' || staff.shifts[d] === '休') currentRest++;
@@ -496,23 +552,24 @@ export class ShiftEngine {
                         }
                     }
 
-                    // --- Check Consecutive Work > 5 ---
+                    // --- Check Consecutive Work > 4 ---
                     // Calculate streak ending at i
-                    // If i is start of a 6th consecutive day
+                    // If i is start of a 5th consecutive day
 
                     let streak = 0;
+                    const isWork = (s) => ["早", "日", "遅", "夜", "明", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s);
                     // Look back
-                    for (let k = 0; k <= 6; k++) {
+                    for (let k = 0; k <= 5; k++) {
                         if (i - k < 0) break;
                         const s = staff.shifts[this.dates[i - k]];
-                        if (["早", "日", "遅", "夜", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s)) {
+                        if (isWork(s)) {
                             streak++;
                         } else {
                             break;
                         }
                     }
 
-                    if (streak > 5) {
+                    if (streak > 4) {
                         // Found 6th day. Need to insert Rest.
                         // Try to swap current day (i) with a future Rest
                         // Find a Rest that is NOT locked/preference and swap
@@ -604,7 +661,7 @@ export class ShiftEngine {
 
             Object.keys(aliasMap).forEach(alias => {
                 const target = aliasMap[alias];
-                if (cleanRow.hasOwnProperty(alias)) {
+                if (Object.prototype.hasOwnProperty.call(cleanRow, alias)) {
                     // Only use alias value if target is empty/undefined
                     // (This prioritizes the standard key which Admin View uses)
                     if (!cleanRow[target] && cleanRow[alias]) {
@@ -677,6 +734,28 @@ export class ShiftEngine {
         });
     }
 
+    step2_1_ApplyEmploymentAvailability() {
+        this.log("Step 2.1: Applying employment start dates...");
+
+        this.shiftTable.forEach(staff => {
+            const startDate = this.normalizeOptionalDate(staff['入職日']);
+            if (!startDate) return;
+
+            this.dates.forEach(date => {
+                if (date < startDate) {
+                    staff.shifts[date] = '__UNAVAILABLE__';
+                    staff.shiftMeta[date] = {
+                        ...(staff.shiftMeta[date] || {}),
+                        isLocked: true,
+                        isUnavailable: true
+                    };
+                }
+            });
+
+            this.log(`[Availability] ${staff.name}: ${startDate} before dates are blank.`);
+        });
+    }
+
     step2_ApplyPreferences() {
         this.log("Step 2: Applying Preferences...");
 
@@ -746,9 +825,16 @@ export class ShiftEngine {
             applyPref("早番希望", "早");
             applyPref("日勤希望", "日");
             applyPref("遅出希望", "遅");
+            applyPref("予備", "予");
+            applyPref("予備希望", "予");
+            applyPref("誕休", "誕");
+            applyPref("誕休希望", "誕");
+            applyPref("研修", "研");
+            applyPref("研修希望", "研");
             applyPref("研修（早）希望", "研修（早）");
             applyPref("研修（日）希望", "研修（日）");
             applyPref("研修（遅）希望", "研修（遅）");
+            applyPref("研修（夜）", "研修（夜）");
             applyPref("研修（夜）希望", "研修（夜）");
 
             // 夜勤希望 (Special handling for 3-day set)
@@ -790,12 +876,12 @@ export class ShiftEngine {
     }
 
 
-    applyNightShiftSet(staff, dateStr, isPreference = false) {
+    applyNightShiftSet(staff, dateStr, isPreference = false, nightSymbol = '夜') {
         const idx = this.dates.indexOf(dateStr);
         if (idx === -1) return;
 
         // Determine symbol based on preference if it's already '研修（夜）'
-        let symbol = "夜";
+        let symbol = nightSymbol;
         if (staff.shifts[this.dates[idx]] === "研修（夜）") symbol = "研修（夜）";
 
         // Night
@@ -917,8 +1003,8 @@ export class ShiftEngine {
                         let needed = requiredRest - currentRestCount;
                         this.log(`[Role Check] Shortage detected: ${needed} days. Filling with '休' randomly.`);
 
-                        // Find all '予' slots
-                        const candidates = this.dates.filter(d => staff.shifts[d] === '予');
+                        // Find all '予' slots (excluding preference)
+                        const candidates = this.dates.filter(d => staff.shifts[d] === '予' && !staff.shiftMeta[d].isPreference);
 
                         // Fisher-Yates Shuffle - ensuring randomness
                         for (let i = candidates.length - 1; i > 0; i--) {
@@ -933,46 +1019,49 @@ export class ShiftEngine {
                             staff.shiftMeta[date].isLocked = true;
                         }
 
-                        // --- Enforce Max 5 Consecutive Work Days ---
-                        // Swap '休' into streaks if necessary, maintaining total rest count.
-                        let safetyLoop = 0;
-                        while (safetyLoop < 20) {
-                            safetyLoop++;
-                            let maxStreak = 0;
-                            let streakStart = -1;
-                            let streakEnd = -1;
+                            // --- Enforce Max 5 Consecutive Work Days (Role Staff) ---
+                            // Swap '休' into streaks if necessary, maintaining total rest count.
+                            let safetyLoop = 0;
+                            while (safetyLoop < 20) {
+                                safetyLoop++;
+                                let maxStreak = 0;
+                                let streakStart = -1;
+                                let streakEnd = -1;
 
-                            let currentRun = 0;
-                            let runStart = 0;
+                                let currentRun = 0;
+                                let runStart = 0;
 
-                            for (let i = 0; i < this.dates.length; i++) {
-                                const d = this.dates[i];
-                                const s = staff.shifts[d];
-                                // Count '予' and Work shifts as work
-                                if (s === '予' || ["早", "日", "遅", "夜", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s)) {
-                                    if (currentRun === 0) runStart = i;
-                                    currentRun++;
-                                } else {
-                                    if (currentRun > maxStreak) {
-                                        maxStreak = currentRun;
-                                        streakStart = runStart;
-                                        streakEnd = i - 1;
+                                // 「明」と「予」と「研」も勤務カウント
+                                const isWork = (s) => s === '予' || ["早", "日", "遅", "夜", "明", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s);
+
+                                for (let i = 0; i < this.dates.length; i++) {
+                                    const d = this.dates[i];
+                                    const s = staff.shifts[d];
+                                    if (isWork(s)) {
+                                        if (currentRun === 0) runStart = i;
+                                        currentRun++;
+                                    } else {
+                                        if (currentRun > maxStreak) {
+                                            maxStreak = currentRun;
+                                            streakStart = runStart;
+                                            streakEnd = i - 1;
+                                        }
+                                        currentRun = 0;
                                     }
-                                    currentRun = 0;
                                 }
-                            }
-                            if (currentRun > maxStreak) {
-                                maxStreak = currentRun;
-                                streakStart = runStart;
-                                streakEnd = this.dates.length - 1;
-                            }
+                                if (currentRun > maxStreak) {
+                                    maxStreak = currentRun;
+                                    streakStart = runStart;
+                                    streakEnd = this.dates.length - 1;
+                                }
 
-                            if (maxStreak <= 5) break;
+                                if (maxStreak <= 5) break;
 
                             // Need to insert a break in the streak
                             let possibleBreakIndices = [];
                             for (let i = streakStart; i <= streakEnd; i++) {
-                                if (staff.shifts[this.dates[i]] === '予') {
+                                const dateStr = this.dates[i];
+                                if (staff.shifts[dateStr] === '予' && !staff.shiftMeta[dateStr].isPreference) {
                                     possibleBreakIndices.push(i);
                                 }
                             }
@@ -1107,23 +1196,17 @@ export class ShiftEngine {
 
             this.dates.forEach((date, i) => {
                 const day = i + 1;
-                const weekNum = Math.floor((day - 1) / 7);
-
                 if (day % 7 === 1 || i === 0) {
                     const weekDates = [];
                     for (let j = 0; j < 7; j++) {
                         if (i + j < this.dates.length) weekDates.push(this.dates[i + j]);
                     }
 
-                    let works = 0;
                     let rests = 0;
-                    let empties = 0;
 
                     weekDates.forEach(d => {
                         const val = staff.shifts[d];
-                        if (["早", "日", "遅", "夜", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(val)) works++;
-                        else if (val === "休") rests++;
-                        else if (val === "") empties++;
+                        if (val === "休") rests++;
                     });
 
                     const requiredRest = 7 - limitPerWeek;
@@ -1173,7 +1256,7 @@ export class ShiftEngine {
             this.shiftTable.forEach(s => {
                 this.dates.forEach(d => {
                     const v = s.shifts[d];
-                    const baseV = v.includes('研修') ? v.match(/（(.*?)）/)?.[1] : v;
+                    const baseV = (v && v.includes && v.includes('研修')) ? v.match(/（(.*?)）/)?.[1] : v;
                     if (['早', '日', '遅', '夜'].includes(baseV)) counts[d][baseV]++;
                 });
             });
@@ -1281,8 +1364,6 @@ export class ShiftEngine {
                     if (currentRest > requiredRest) {
                         // Too many rests: Change a '休' to a work day (randomly available shift)
                         // Be careful not to break Night-Ming-Rest sequence or restrictions
-                        let diff = currentRest - requiredRest;
-
                         // Find convertible '休' days (not part of Night set, preferably not preference)
                         const candidates = this.dates.filter((d, i) => {
                             if (staff.shifts[d] !== '休') return false;
@@ -1303,13 +1384,11 @@ export class ShiftEngine {
                         const dayBands = bands.filter(b => b !== '夜');
                         const shuffledBands = [...dayBands].sort(() => Math.random() - 0.5); // Randomize preference
 
-                        let assigned = false;
                         for (const band of shuffledBands) {
                             if (this.isShiftAllowed(staff, targetDate, band)) {
                                 staff.shifts[targetDate] = band;
                                 // We keep lock as true since this is a fix
                                 staff.shiftMeta[targetDate].isLocked = true;
-                                assigned = true;
                                 break;
                             }
                         }
@@ -1317,8 +1396,6 @@ export class ShiftEngine {
                     }
                     else if (currentRest < requiredRest) {
                         // Not enough rests: Change a work day to '休'
-                        let diff = requiredRest - currentRest;
-
                         // Find convertible work days (Early, Day, Late)
                         // Avoid Night/Ming
                         const candidates = this.dates.filter(d => {
@@ -1373,9 +1450,8 @@ export class ShiftEngine {
                 if (!canNight) return false;
                 if (s.shifts[date] !== "") return false;
 
-                // Exclude Trainee from regular Night Shift assignment
-                const isTrainee = s['研修生'] === true || s['研修生'] === '〇' || s['研修生'] === 'TRUE';
-                if (isTrainee) return false;
+                // Exclude active trainees from regular Night Shift assignment.
+                if (this.isTrainingDate(s, date)) return false;
 
                 // Use strict check including weekly night limits
                 if (!this.isShiftAllowed(s, date, '夜')) return false;
@@ -1403,6 +1479,59 @@ export class ShiftEngine {
                 need--;
                 candidates = candidates.filter(c => c !== chosen);
             }
+        });
+    }
+
+    step5_5_ApplyNightTraining() {
+        this.log("Step 5.5: Applying one-time night training...");
+
+        const canReplaceForNightTraining = (staff, date, allowedValues) => {
+            if (!date) return true;
+            const meta = staff.shiftMeta[date] || {};
+            if (meta.isPreference || meta.isUnavailable) return false;
+            const current = staff.shifts[date];
+            if (current === "") return true;
+            if (allowedValues.includes(current)) return true;
+            return typeof current === 'string' && current.startsWith('研修');
+        };
+
+        const targets = this.shiftTable.filter(staff => {
+            const canNight = this.isTruthyMark(staff['夜可']);
+            return canNight && this.isNightTrainingPending(staff);
+        });
+
+        targets.forEach(staff => {
+            for (let i = 0; i < this.dates.length; i++) {
+                const date = this.dates[i];
+                if (this.isBeforeEmployment(staff, date)) continue;
+
+                // Put night training on a day where a regular night worker is already present.
+                const hasRegularNight = this.shiftTable.some(other => other !== staff && other.shifts[date] === '夜');
+                if (!hasRegularNight) continue;
+
+                const nextDate = this.dates[i + 1];
+                const nextNextDate = this.dates[i + 2];
+                if (!canReplaceForNightTraining(staff, date, ["早", "日", "遅", "予", "研", "休"])) continue;
+                if (!canReplaceForNightTraining(staff, nextDate, ["早", "日", "遅", "予", "研", "明", "休"])) continue;
+                if (!canReplaceForNightTraining(staff, nextNextDate, ["早", "日", "遅", "予", "研", "休"])) continue;
+
+                staff.shifts[date] = "";
+                staff.shiftMeta[date] = { ...(staff.shiftMeta[date] || {}), isLocked: false };
+                if (nextDate) {
+                    staff.shifts[nextDate] = "";
+                    staff.shiftMeta[nextDate] = { ...(staff.shiftMeta[nextDate] || {}), isLocked: false };
+                }
+                if (nextNextDate) {
+                    staff.shifts[nextNextDate] = "";
+                    staff.shiftMeta[nextNextDate] = { ...(staff.shiftMeta[nextNextDate] || {}), isLocked: false };
+                }
+                this.applyNightShiftSet(staff, date, false, '研修（夜）');
+                staff['夜勤研修'] = '済';
+                this.log(`[Night Training] ${staff.name}: ${date} 研修（夜） assigned.`);
+                return;
+            }
+
+            this.log(`[Night Training] WARN: ${staff.name} needs night training, but no assignable date was found.`);
         });
     }
 
@@ -1463,8 +1592,7 @@ export class ShiftEngine {
         tasks.forEach(task => {
             // Find candidates
             let candidates = this.shiftTable.filter(s => {
-                const isTrainee = s['研修生'] === true || s['研修生'] === '〇' || s['研修生'] === 'TRUE';
-                if (isTrainee) return false;
+                if (this.isTrainingDate(s, task.date)) return false;
 
                 if (this.isStaffExclusive(s) && s.shiftMeta[task.date].isLocked) return false;
 
@@ -1525,8 +1653,7 @@ export class ShiftEngine {
             if (leadersWorking.length > 0) return;
 
             let candidates = this.shiftTable.filter(s => {
-                const isTrainee = s['研修生'] === true || s['研修生'] === '〇' || s['研修生'] === 'TRUE';
-                if (isTrainee) return false;
+                if (this.isTrainingDate(s, date)) return false;
 
                 if (this.isStaffExclusive(s) && s.shiftMeta[date].isLocked) return false;
                 if (s.shifts[date] !== "") return false;
@@ -1574,7 +1701,7 @@ export class ShiftEngine {
             counts[s.name] = c;
         });
 
-        this.dates.forEach((date, i) => {
+        this.dates.forEach(date => {
             const req = reqMap[date];
             if (!req) return;
 
@@ -1585,8 +1712,7 @@ export class ShiftEngine {
             if (need <= 0) return;
 
             let candidates = this.shiftTable.filter(s => {
-                const isTrainee = s['研修生'] === true || s['研修生'] === '〇' || s['研修生'] === 'TRUE';
-                if (isTrainee) return false;
+                if (this.isTrainingDate(s, date)) return false;
 
                 if (this.isStaffExclusive(s) && s.shiftMeta[date].isLocked) return false;
                 if (s.shifts[date] !== "") return false;
@@ -1622,14 +1748,19 @@ export class ShiftEngine {
             let targetWork = 0;
             const workDaysStr = staff['勤務日数/週'];
             const workDays = parseIntSafe(workDaysStr);
+            const availableDates = this.getAvailableDates(staff);
+            const availableDays = availableDates.length;
 
             // Priority: Work Days Per Week
             if (workDays > 0) {
-                targetWork = Math.floor((this.dates.length / 7) * workDays);
+                targetWork = Math.floor((availableDays / 7) * workDays);
             } else {
                 // Fallback: Holiday count
                 const requiredRest = parseIntSafe(staff['公休数']) || this.monthlySettings.monthlyHoliday || 9;
-                targetWork = this.dates.length - requiredRest;
+                const restTarget = this.normalizeOptionalDate(staff['入職日'])
+                    ? Math.round(requiredRest * (availableDays / this.dates.length))
+                    : requiredRest;
+                targetWork = Math.max(0, availableDays - restTarget);
             }
 
             let currentWork = 0;
@@ -1642,7 +1773,7 @@ export class ShiftEngine {
         };
 
         this.shiftTable.forEach(staff => {
-            if (staff['研修生'] === true || staff['研修生'] === '〇') return;
+            if (this.isTraineeStaff(staff) && !this.hasTrainingPeriod(staff)) return;
 
             let deficit = calculateDeficit(staff);
 
@@ -1698,7 +1829,7 @@ export class ShiftEngine {
                 let current = 0;
                 this.dates.forEach(d => {
                     const v = s.shifts[d];
-                    const baseV = v.includes('研修') ? v.match(/（(.*?)）/)?.[1] : v;
+                    const baseV = (v && v.includes && v.includes('研修')) ? v.match(/（(.*?)）/)?.[1] : v;
                     if (["早", "日", "遅", "夜"].includes(baseV)) current++;
                 });
                 stats.push({ staff: s, target, current, diff: current - target });
@@ -1778,8 +1909,7 @@ export class ShiftEngine {
 
                 // Find assigned staff (Regulars only)
                 const assignedStaff = this.shiftTable.filter(s => {
-                    const isTrainee = s['研修生'] === true || s['研修生'] === '〇' || s['研修生'] === 'TRUE';
-                    if (isTrainee) return false;
+                    if (this.isTrainingDate(s, date)) return false;
                     return s.shifts[date] === type;
                 });
 
@@ -1814,8 +1944,7 @@ export class ShiftEngine {
         this.log("Step 8.9: Force Adjusting Trainee Holidays...");
 
         this.shiftTable.forEach(staff => {
-            const isTrainee = staff['研修生'] === true || staff['研修生'] === '〇' || staff['研修生'] === 'TRUE';
-            if (!isTrainee) return;
+            if (!this.isTraineeStaff(staff) || this.hasTrainingPeriod(staff)) return;
 
             const requiredRest = parseInt(staff['公休数'], 10) || this.monthlySettings.monthlyHoliday || 9;
 
@@ -1926,7 +2055,7 @@ export class ShiftEngine {
                     if (shortage > 0) {
                         // Find Chief with '予' (Plan) or '休' (Rest) if strictly needed?
                         // User prefer '予' -> Work.
-                        const chief = chiefs.find(c => c.shifts[date] === '予' && this.isShiftAllowed(c, date, type));
+                        const chief = chiefs.find(c => c.shifts[date] === '予' && !c.shiftMeta[date].isPreference && this.isShiftAllowed(c, date, type));
                         if (chief) {
                             chief.shifts[date] = type;
                             this.log(`  -> [Shortage] Assigned Chief ${chief.name} to ${type} on ${date}`);
@@ -2030,27 +2159,41 @@ export class ShiftEngine {
         this.log("Step 10: Final Validation...");
         let errors = 0;
         this.shiftTable.forEach(staff => {
+            // 役職者判定
+            const isManager = staff['サ責'] === true || staff['サ責'] === '〇' || staff['サ責'] === 'TRUE';
+            const isDirector = staff['施設長'] === true || staff['施設長'] === '〇' || staff['施設長'] === 'TRUE';
+            const isClerk = staff['事務員'] === true || staff['事務員'] === '〇' || staff['事務員'] === 'TRUE';
+            const isAdmin = staff['管理者'] === true || staff['管理者'] === '〇' || staff['管理者'] === 'TRUE';
+            const isChief = staff['主任'] === true || staff['主任'] === '〇' || staff['主任'] === 'TRUE';
+            const isRoleStaff = isManager || isDirector || isClerk || isAdmin || isChief;
+
+            const maxConsecutive = isRoleStaff ? 5 : 4;
+
             let consecutive = 0;
+            const isWork = (s) => {
+                if (!s) return false;
+                const base = (s.includes && s.includes('研修')) ? s.match(/（(.*?)）/)?.[1] : s;
+                return ["早", "日", "遅", "夜", "明", "予", "研"].includes(base);
+            };
+
             this.dates.forEach((date, i) => {
                 const shift = staff.shifts[date];
-                const baseShift = shift.includes('研修') ? shift.match(/（(.*?)）/)?.[1] : shift;
+                const baseShift = (shift && shift.includes && shift.includes('研修')) ? shift.match(/（(.*?)）/)?.[1] : shift;
 
-                if (["早", "日", "遅", "夜"].includes(baseShift)) {
+                if (isWork(shift)) {
                     consecutive++;
-                } else if (shift === "明") {
-                    // Stay same
                 } else {
                     consecutive = 0;
                 }
 
-                if (consecutive > 5) {
-                    this.log(`WARN: ${staff.name} has ${consecutive} consecutive work days at ${date}`);
+                if (consecutive > maxConsecutive) {
+                    this.log(`WARN: ${staff.name} has ${consecutive} consecutive work days at ${date} (Limit: ${maxConsecutive})`);
                     errors++;
                 }
 
                 if (i > 0) {
                     const prev = staff.shifts[this.dates[i - 1]];
-                    const prevBase = prev.includes('研修') ? prev.match(/（(.*?)）/)?.[1] : prev;
+                    const prevBase = (prev && prev.includes && prev.includes('研修')) ? prev.match(/（(.*?)）/)?.[1] : prev;
                     if (prevBase === '遅' && baseShift === '早') {
                         this.log(`WARN: ${staff.name} Late->Early on ${date}`);
                         errors++;

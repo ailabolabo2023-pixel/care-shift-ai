@@ -3,7 +3,7 @@ import { saveAs } from 'file-saver';
 import React, { useState, useMemo } from 'react';
 import { ZoomIn, ZoomOut, Maximize, Minimize, Save, FileSpreadsheet, Printer } from 'lucide-react';
 
-const SHIFT_TYPES = ["", "早", "日", "遅", "夜", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）", "明", "休", "有", "公", "予"]; // added 研修
+const SHIFT_TYPES = ["", "早", "日", "遅", "夜", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）", "明", "休", "有", "公", "予", "誕", "研"]; // added 研修, 誕, 研
 
 const ShiftCell = ({ value, onChange, isPreference }) => {
     // Simple native select for robustness and ease of use
@@ -18,6 +18,8 @@ const ShiftCell = ({ value, onChange, isPreference }) => {
         if (val === '有') return 'text-pink-600 bg-pink-50';
         if (val === '公') return 'text-red-600 bg-red-50';
         if (val === '予') return 'text-teal-600 bg-teal-50';
+        if (val === '誕') return 'text-purple-600 bg-purple-50';
+        if (val === '研') return 'text-sky-600 bg-sky-50';
         return 'text-slate-700';
     };
 
@@ -328,6 +330,9 @@ const ShiftTableView = ({ table, dates, dayOfWeeks, onCellChange, defaultMonthly
                     else if (val === '日') { color = 'FF16A34A'; } // Green
                     else if (val === '早') { color = 'FFEA580C'; } // Orange
                     else if (val === '遅') { color = 'FF2563EB'; } // Blue
+                    else if (val === '予') { color = 'FF0D9488'; bold = true; } // Teal
+                    else if (val === '誕') { color = 'FF9333EA'; } // Purple
+                    else if (val === '研') { color = 'FF0284C7'; } // Sky
 
                     cell.font = { ...baseFont, size: fontSize, color: { argb: color }, bold: bold };
 
