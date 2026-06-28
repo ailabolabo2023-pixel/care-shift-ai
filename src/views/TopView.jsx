@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useData } from '../context/DataContext';
-import FileUploader from '../components/FileUploader';
 import { motion } from 'framer-motion';
-import { ArrowRight, BookOpen, Building2, Calendar, ClipboardList, Upload, Users } from 'lucide-react';
+import { ArrowRight, BookOpen, Building2, Calendar, ClipboardList, Users } from 'lucide-react';
 
 const TopView = () => {
     const {
@@ -180,17 +179,6 @@ const TopView = () => {
                         </section>
                     </div>
 
-                    {!excelData && (
-                        <details className="mt-6 rounded-2xl border border-stone-200 bg-white/70 p-4">
-                            <summary className="cursor-pointer text-sm font-bold text-stone-600 flex items-center gap-2">
-                                <Upload className="w-4 h-4" />
-                                既存のExcelファイルから移行する
-                            </summary>
-                            <div className="mt-4 max-w-md">
-                                <FileUploader />
-                            </div>
-                        </details>
-                    )}
                 </div>
             </motion.div>
 
