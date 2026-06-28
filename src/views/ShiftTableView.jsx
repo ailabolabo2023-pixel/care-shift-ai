@@ -561,11 +561,12 @@ const ShiftTableView = ({ table, dates, dayOfWeeks, onCellChange, defaultMonthly
     // Row Counts (per staff)
     const rowCounts = useMemo(() => {
         return table.map(staff => {
-            const counts = { '早': 0, '日': 0, '遅': 0, '夜': 0, '明': 0, '休': 0, '勤': 0 };
+            const counts = { '早': 0, '日': 0, '遅': 0, '夜': 0, '明': 0, '予': 0, '休': 0, '勤': 0 };
             dates.forEach(date => {
                 const val = staff.shifts[date];
                 if (counts[val] !== undefined) counts[val]++;
-                if (["早", "日", "遅", "夜"].includes(val)) counts['勤']++;
+                // 予備は「出勤」扱い（公休には入れない）
+                if (["早", "日", "遅", "夜", "予"].includes(val)) counts['勤']++;
             });
             return counts;
         });
@@ -653,6 +654,7 @@ const ShiftTableView = ({ table, dates, dayOfWeeks, onCellChange, defaultMonthly
                                         <th className="px-1 py-1 text-center text-xs font-bold text-slate-500 bg-slate-50 border-b border-slate-200 sticky top-0 z-10 w-8 print:static">遅</th>
                                         <th className="px-1 py-1 text-center text-xs font-bold text-slate-500 bg-slate-50 border-b border-slate-200 sticky top-0 z-10 w-8 print:static">夜</th>
                                         <th className="px-1 py-1 text-center text-xs font-bold text-slate-500 bg-slate-50 border-b border-slate-200 sticky top-0 z-10 w-8 print:static">明</th>
+                                        <th className="px-1 py-1 text-center text-xs font-bold text-teal-600 bg-slate-50 border-b border-slate-200 sticky top-0 z-10 w-8 print:static" title="予備（出勤・調整要員）">予</th>
                                         <th className="px-1 py-1 text-center text-xs font-bold text-slate-500 bg-slate-50 border-r border-b border-slate-200 sticky top-0 z-10 w-8 print:static">休</th>
                                     </>
                                 )}
@@ -711,6 +713,7 @@ const ShiftTableView = ({ table, dates, dayOfWeeks, onCellChange, defaultMonthly
                                                 <td className="text-center text-xs bg-slate-50/50 text-slate-600 font-mono border-b border-slate-100 print:border-slate-300">{rowCounts[rowIndex]['遅'] || 0}</td>
                                                 <td className="text-center text-xs bg-slate-50/50 text-slate-600 font-mono border-b border-slate-100 print:border-slate-300">{rowCounts[rowIndex]['夜'] || 0}</td>
                                                 <td className="text-center text-xs bg-slate-50/50 text-slate-600 font-mono border-b border-slate-100 print:border-slate-300">{rowCounts[rowIndex]['明'] || 0}</td>
+                                                <td className="text-center text-xs bg-teal-50/60 text-teal-700 font-mono border-b border-slate-100 print:border-slate-300">{rowCounts[rowIndex]['予'] || 0}</td>
                                                 <td className={`text-center text-xs font-mono border-r border-b border-slate-100 print:border-slate-300 ${isWarning ? 'bg-yellow-300 font-bold text-slate-900 border-yellow-400' : 'bg-slate-50/50 text-slate-600'}`}>
                                                     {rowCounts[rowIndex]['休'] || 0}
                                                 </td>
@@ -743,7 +746,7 @@ const ShiftTableView = ({ table, dates, dayOfWeeks, onCellChange, defaultMonthly
                                     <td className="px-4 py-2 sticky left-0 bg-slate-50 border-r border-slate-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.1)] z-30 print:static print:shadow-none print:border-slate-300">
                                         合計 (早/日/遅/夜)
                                     </td>
-                                    <td colSpan={6} className="border-r border-slate-200 print:border-slate-300"></td>
+                                    <td colSpan={7} className="border-r border-slate-200 print:border-slate-300"></td>
                                     {colCounts.map((counts, i) => {
                                         const date = dates[i];
 
