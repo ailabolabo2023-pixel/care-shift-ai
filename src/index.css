@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 数値入力の上下矢印（スピナー）を消す。
+   スタッフ設定の「日数/週」「夜勤/週」など狭い列で、矢印に幅を取られて
+   数字が見えなくなるのを防ぐ。 */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 @layer utilities {
   @media print {
     body {

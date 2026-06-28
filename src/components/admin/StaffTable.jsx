@@ -147,8 +147,8 @@ const StaffTable = ({ data, onUpdate }) => {
                         <tr>
                             <th className="w-10 px-2 py-3 bg-stone-50"></th>{/* Grip Column */}
                             <th className="px-3 py-3 text-left font-bold text-stone-600 min-w-[120px]">氏名</th>
-                            <th className="px-2 py-3 text-center font-bold text-stone-600 w-20">日数/週</th>
-                            <th className="px-2 py-3 text-center font-bold text-stone-600 w-20">夜勤/週</th>
+                            <th className="px-2 py-3 text-center font-bold text-stone-600 w-20 min-w-[64px]">日数/週</th>
+                            <th className="px-2 py-3 text-center font-bold text-stone-600 w-20 min-w-[64px]">夜勤/週</th>
                             <th className="px-3 py-3 text-left font-bold text-stone-600 min-w-[135px]">入職日</th>
                             <th className="px-3 py-3 text-left font-bold text-stone-600 min-w-[135px]">研修開始</th>
                             <th className="px-3 py-3 text-left font-bold text-stone-600 min-w-[135px]">研修終了</th>
