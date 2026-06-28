@@ -1,12 +1,10 @@
 // スマホ入力ページ（Apps Script ウェブアプリ）への職員名簿の自動同期。
 // 職員を保存するたびに氏名一覧を送り、スマホ側の氏名プルダウンを最新に保つ。
 
-// デプロイ済みウェブアプリURL（再デプロイで変わったら localStorage で上書き可）
-const DEFAULT_WEBAPP_URL =
-    'https://script.google.com/macros/s/AKfycbwJJ_2pAkDD4c-OmI7aLDccf4wRuHovCtFLPFczb5fpWbxYaGvCbDp9-EgCyPe49q4Y1Q/exec';
-
+// スマホ入力ページ（ウェブアプリ）URLは「施設ごとに」アプリの設定欄で登録する。
+// 固定URLは持たない（持つと別施設の名簿を上書きしてしまうため）。未設定なら同期しない。
 export const getWebAppUrl = () =>
-    (localStorage.getItem('care_shift_ai_webapp_url') || DEFAULT_WEBAPP_URL).trim();
+    (localStorage.getItem('care_shift_ai_webapp_url') || '').trim();
 
 /**
  * マスタ（スタッフ一覧）の氏名を、スマホ入力ページの名簿に反映する。
