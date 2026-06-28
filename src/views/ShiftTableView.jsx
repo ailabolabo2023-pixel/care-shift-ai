@@ -393,7 +393,9 @@ const ShiftTableView = ({ table, dates, dayOfWeeks, onCellChange, defaultMonthly
 
                 // Conditional Formatting: Holiday Warning
                 // If actual holidays != target holidays
-                const holidayTarget = parseInt(staff['公休数'], 10) || defaultMonthlyHoliday;
+                const holidayTarget = (staff.requiredRest != null)
+                    ? staff.requiredRest
+                    : (parseInt(staff['公休数'], 10) || defaultMonthlyHoliday);
                 const holidayCellAddress = row.getCell(counterStartCol + 5).address;
                 worksheet.addConditionalFormatting({
                     ref: holidayCellAddress,
@@ -684,7 +686,9 @@ const ShiftTableView = ({ table, dates, dayOfWeeks, onCellChange, defaultMonthly
                                     {/* Row Counters */}
                                     {showCounter && (() => {
                                         const count = rowCounts[rowIndex];
-                                        const holiday = parseInt(staff['公休数'], 10) || defaultMonthlyHoliday;
+                                        const holiday = (staff.requiredRest != null)
+                                            ? staff.requiredRest
+                                            : (parseInt(staff['公休数'], 10) || defaultMonthlyHoliday);
                                         // Warning if actual rest days != target holiday (shortage OR excess)
                                         const isExclusive = staff['専属'] === true || staff['専属'] === '〇' || staff['専属'] === 'TRUE';
                                         const isTrainee = staff['研修生'] === true || staff['研修生'] === '〇' || staff['研修生'] === 'TRUE';

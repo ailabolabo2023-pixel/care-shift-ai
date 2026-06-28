@@ -2021,149 +2021,115 @@ export class ShiftEngine {
         });
     }
     step9_5_ChiefAdjustment() {
-        this.log("Step 9.5: Chief Adjustment (Filling Shortages & Adjusting Staff Holidays)...");
+        this.log("Step 9.5: 調整フェーズ（日勤不足の穴埋め＋公休バランス）...");
         const reqSheet = this.data['要員数'];
-        const chiefs = this.shiftTable.filter(s => s['主任'] === true || s['主任'] === '〇' || s['主任'] === 'TRUE');
 
-        if (chiefs.length === 0) {
-            this.log("No Chiefs found. Skipping Step 9.5.");
-            return;
-        }
+        const isMark = (v) => v === true || v === '〇' || v === 'TRUE';
+        const isChief = (s) => isMark(s['主任']);
+        const isSekinin = (s) => isMark(s['サ責']);
+        const isExclusive = (s) => this.isStaffExclusive(s);
+        const meta = (s, d) => s.shiftMeta[d] || {};
+        const freeToChange = (s, d) => !meta(s, d).isPreference && !meta(s, d).isLocked;
+        const restCount = (s) => this.dates.reduce((n, d) => (s.shifts[d] === '公' || s.shifts[d] === '休') ? n + 1 : n, 0);
 
-        // Helper to check daily needs
-        const getShortage = (date, type) => {
+        // 日勤の不足数（予はカウントしない＝'日'のみ数える）
+        const dayShortage = (date) => {
             if (!reqSheet) return 0;
-            const normalizedDate = this.normalizeDateStr(date);
-            const row = reqSheet.find(r => this.normalizeDateStr(r['日付']) === normalizedDate);
+            const nd = this.normalizeDateStr(date);
+            const row = reqSheet.find(r => this.normalizeDateStr(r['日付']) === nd);
             if (!row) return 0;
-
-            let reqVal = 0;
-            if (type === '早') reqVal = row['早番必要'] || row['早必要'] || row['早'] || 0;
-            if (type === '日') reqVal = row['日勤必要'] || row['日必要'] || row['日'] || 0;
-            if (type === '遅') reqVal = row['遅番必要'] || row['遅必要'] || row['遅'] || 0;
-            if (type === '夜') reqVal = row['夜勤必要'] || row['夜必要'] || row['夜'] || 0;
-
-            const reqNum = parseInt(reqVal, 10);
+            const reqNum = parseInt(row['日勤必要'] || row['日必要'] || row['日'] || 0, 10);
             if (reqNum <= 0) return 0;
-
-            const current = this.shiftTable.filter(s => s.shifts[date] === type).length;
+            const current = this.shiftTable.filter(s => s.shifts[date] === '日').length;
             return reqNum - current;
         };
 
-        // --- Phase 1: Fill Daily Shortages with Chief '予' ---
-        this.log("--- Chief Phase 1: Fill Shortages ---");
-        // Loop a few times to ensure we catch cascading shortages if any
-        for (let loop = 0; loop < 3; loop++) {
-            let filledSomething = false;
+        // ---- A. 日勤の不足を埋める：①公休過多の人 → ②主任・サ責の予（均等）----
+        const roleUse = new Map(); // 主任・サ責の予→勤務に変えた回数（均等配分用）
+        for (let loop = 0; loop < 5; loop++) {
+            let filled = false;
             this.dates.forEach(date => {
-                ['早', '日', '遅', '夜'].forEach(type => {
-                    const shortage = getShortage(date, type);
-                    if (shortage > 0) {
-                        // Find Chief with '予' (Plan) or '休' (Rest) if strictly needed?
-                        // User prefer '予' -> Work.
-                        const chief = chiefs.find(c => c.shifts[date] === '予' && !c.shiftMeta[date].isPreference && this.isShiftAllowed(c, date, type));
-                        if (chief) {
-                            chief.shifts[date] = type;
-                            this.log(`  -> [Shortage] Assigned Chief ${chief.name} to ${type} on ${date}`);
-                            filledSomething = true;
-                        }
+                let need = dayShortage(date);
+                let guard = 0;
+                while (need > 0 && guard++ < 30) {
+                    // ① 公休過多（休>目標）の人の '休' を '日' に（過多が大きい人から）
+                    const excess = this.shiftTable
+                        .map(s => ({ s, over: restCount(s) - this.getRequiredRest(s) }))
+                        .filter(x => x.over > 0 && x.s.shifts[date] === '休'
+                            && freeToChange(x.s, date) && this.isShiftAllowed(x.s, date, '日'))
+                        .sort((a, b) => b.over - a.over);
+                    if (excess.length) {
+                        excess[0].s.shifts[date] = '日';
+                        this.log(`  -> [日勤不足] 公休過多の ${excess[0].s.name} を ${date} に日勤`);
+                        filled = true; need--; continue;
                     }
-                });
+                    // ② 主任・サ責の '予' を '日' に（使用回数が少ない人優先＝均等）
+                    const roleCands = this.shiftTable
+                        .filter(s => (isChief(s) || isSekinin(s)) && s.shifts[date] === '予'
+                            && freeToChange(s, date) && this.isShiftAllowed(s, date, '日'))
+                        .sort((a, b) => (roleUse.get(a) || 0) - (roleUse.get(b) || 0));
+                    if (roleCands.length) {
+                        roleCands[0].shifts[date] = '日';
+                        roleUse.set(roleCands[0], (roleUse.get(roleCands[0]) || 0) + 1);
+                        this.log(`  -> [日勤不足] 主任/サ責 ${roleCands[0].name} の予を ${date} に日勤`);
+                        filled = true; need--; continue;
+                    }
+                    break; // これ以上は埋められない
+                }
             });
-            if (!filledSomething) break;
+            if (!filled) break;
         }
 
-        // --- Phase 2: Adjust Staff Holidays (Yellow Markers) ---
-        this.log("--- Chief Phase 2: Balance Staff Holidays ---");
-
-        let adjustmentMade = true;
-        let loopCount = 0;
-        const MAX_LOOPS = 50;
-
-        while (adjustmentMade && loopCount < MAX_LOOPS) {
-            adjustmentMade = false;
-            loopCount++;
-
-            // Sort staff by imbalance severity
-            const staffWithDiff = this.shiftTable.map(staff => {
-                if (chiefs.includes(staff)) return { staff, diff: 0 };
-
-                const requiredRest = this.getRequiredRest(staff);
-                let currentRest = 0;
-                this.dates.forEach(d => {
-                    if (staff.shifts[d] === '公' || staff.shifts[d] === '休') currentRest++;
-                });
-                return { staff, diff: requiredRest - currentRest };
-            }).filter(item => item.diff !== 0);
-
-            // Sort: prioritize largest absolute diff
-            staffWithDiff.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
-
-            for (const { staff, diff } of staffWithDiff) {
-                if (diff === 0) continue;
-
-                if (diff > 0) {
-                    // --- Staff works too much (Needs Rest) ---
-                    // Staff gives Work to Chief. Chief gives '予' (or '休'?) to Staff? 
-                    // No. Chief takes Work. Staff takes Rest.
-
-                    for (const date of this.dates) {
-                        const sShift = staff.shifts[date];
-                        if (['早', '日', '遅', '夜'].includes(sShift) && !staff.shiftMeta[date].isLocked) {
-
-                            // Find Chief '予' who can take sShift
-                            const helperChief = chiefs.find(c => c.shifts[date] === '予' && this.isShiftAllowed(c, date, sShift));
-
-                            if (helperChief) {
-                                // Swap
-                                staff.shifts[date] = '休'; // Staff Rests
-                                helperChief.shifts[date] = sShift; // Chief Works
-
-                                this.log(`  -> [Rest Fix] Chief ${helperChief.name} took ${sShift} from ${staff.name} on ${date}`);
-                                adjustmentMade = true;
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    // --- Staff rests too much (Needs Work) ---
-                    // Staff takes Work/予 from Chief. Chief takes Rest.
-
-                    for (const date of this.dates) {
-                        if (staff.shifts[date] === '休' && !staff.shiftMeta[date].isLocked && !staff.shiftMeta[date].isPreference) {
-
-                            // Find Chief with '予' or Work
-                            // We prefer Chief giving '予' so they can Rest.
-                            const helperChief = chiefs.find(c => {
-                                const cs = c.shifts[date];
-                                return (cs === '予' || ['早', '日', '遅', '夜'].includes(cs)) &&
-                                    !c.shiftMeta[date].isLocked;
-                            });
-
-                            if (helperChief) {
-                                const chiefShift = helperChief.shifts[date];
-                                let newStaffShift = (chiefShift === '予') ? '日' : chiefShift;
-
-                                if (this.isShiftAllowed(staff, date, newStaffShift)) {
-                                    staff.shifts[date] = newStaffShift; // Staff Works
-                                    helperChief.shifts[date] = '休'; // Chief Rests
-
-                                    this.log(`  -> [Work Fix] Staff ${staff.name} took ${newStaffShift} from Chief ${helperChief.name} on ${date}`);
-                                    adjustmentMade = true;
-                                    break;
-                                }
-                            }
-                        }
+        // ---- B. 公休が足りない人（働きすぎ）：勤務を主任・サ責の予に肩代わりしてもらい休に ----
+        const roleHelpers = this.shiftTable.filter(s => isChief(s) || isSekinin(s));
+        this.shiftTable.forEach(staff => {
+            if (roleHelpers.includes(staff)) return;
+            let need = this.getRequiredRest(staff) - restCount(staff); // >0 = 休が足りない
+            let guard = 0;
+            while (need > 0 && guard++ < 40) {
+                let swapped = false;
+                for (const date of this.dates) {
+                    const sh = staff.shifts[date];
+                    if (!['早', '日', '遅', '夜'].includes(sh)) continue;
+                    if (!freeToChange(staff, date)) continue;
+                    const helper = roleHelpers.find(c => c.shifts[date] === '予'
+                        && freeToChange(c, date) && this.isShiftAllowed(c, date, sh));
+                    if (helper) {
+                        helper.shifts[date] = sh;   // 主任・サ責が肩代わり（人数は維持）
+                        staff.shifts[date] = '休';  // 本人は休
+                        need--; swapped = true;
+                        this.log(`  -> [公休不足] ${staff.name} の${sh}(${date})を ${helper.name} が肩代わり`);
+                        break;
                     }
                 }
-                if (adjustmentMade) break; // Check imbalance again
+                if (!swapped) break;
             }
-        }
+        });
+
+        // ---- C. 公休が多すぎる人（専属以外）：余分な休を '予'(待機) に変換して公休を減らす ----
+        this.shiftTable.forEach(staff => {
+            if (isExclusive(staff)) return;
+            let over = restCount(staff) - this.getRequiredRest(staff);
+            if (over <= 0) return;
+            for (const date of this.dates) {
+                if (over <= 0) break;
+                if (staff.shifts[date] === '休' && freeToChange(staff, date)) {
+                    if (this.checkConsecutiveWork(staff, date)) continue; // 連勤上限を超える日は避ける
+                    staff.shifts[date] = '予';
+                    over--;
+                    this.log(`  -> [公休過多] ${staff.name} の休(${date})を予に`);
+                }
+            }
+        });
     }
 
     step10_FinalizeValidation() {
         this.log("Step 10: Final Validation...");
         let errors = 0;
+        // 按分後の必要公休数を各職員に保持（ビューの黄色判定と一致させる）
+        this.shiftTable.forEach(staff => {
+            staff.requiredRest = this.getRequiredRest(staff);
+        });
         this.shiftTable.forEach(staff => {
             // 役職者判定
             const isManager = staff['サ責'] === true || staff['サ責'] === '〇' || staff['サ責'] === 'TRUE';
