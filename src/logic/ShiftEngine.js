@@ -1501,9 +1501,14 @@ export class ShiftEngine {
         });
 
         targets.forEach(staff => {
+            // 研修終了日以降の「一番最初の夜勤」を研修夜勤にする。
+            // 研修終了日が未設定の場合は、従来どおり月内で最初に置ける夜に割り当てる。
+            const trainingEnd = this.normalizeOptionalDate(staff['研修終了日']);
             for (let i = 0; i < this.dates.length; i++) {
                 const date = this.dates[i];
                 if (this.isBeforeEmployment(staff, date)) continue;
+                // 研修終了日より前の日付は対象外（研修期間中は昼の研修のため）
+                if (trainingEnd && date < trainingEnd) continue;
 
                 // Put night training on a day where a regular night worker is already present.
                 const hasRegularNight = this.shiftTable.some(other => other !== staff && other.shifts[date] === '夜');
