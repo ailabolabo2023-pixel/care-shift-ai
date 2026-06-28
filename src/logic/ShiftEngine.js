@@ -426,9 +426,11 @@ export class ShiftEngine {
             this.step8_5_BalanceWorkDays();
             this.step8_8_AdjustStaffCounts(); // New: Reduce excess staff
             this.step8_9_ForceAdjustTraineeHolidays(); // New: Trainee Holiday Final Check
-            this.step9_5_ChiefAdjustment(); // New: Chief uses '予' to fill holes and adjust holidays
             this.step9_DistributeOffDays();
             this.cleanupUnavailableShifts();
+            // ★調整フェーズは「生成（休の配布まで）」が終わった後に最後に実行する。
+            //   ここで日勤不足の穴埋め・公休過多→予(出勤)変換などを行う。
+            this.step9_5_ChiefAdjustment();
             this.step10_FinalizeValidation();
 
             this.log("All steps completed successfully.");
