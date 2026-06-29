@@ -2036,6 +2036,18 @@ export class ShiftEngine {
         // 予備(予)は「展開するための待機」なので、ロックされていても勤務に回してよい（希望のみ保護）。
         const usableYobi = (s, d) => s.shifts[d] === '予' && !meta(s, d).isPreference;
         const restCount = (s) => this.dates.reduce((n, d) => (s.shifts[d] === '公' || s.shifts[d] === '休') ? n + 1 : n, 0);
+        // ロックだけを一時的に無視して可否判定（連勤・前後関係・週上限などの本来の制約は維持）。
+        const allowedIgnoringLock = (s, d, type) => {
+            const m = s.shiftMeta[d] || (s.shiftMeta[d] = {});
+            const was = m.isLocked; m.isLocked = false;
+            const ok = this.isShiftAllowed(s, d, type);
+            m.isLocked = was;
+            return ok;
+        };
+        const deploy = (s, d, type) => { // 勤務を確定し、ロックは解除（実勤務になったため）
+            s.shifts[d] = type;
+            if (s.shiftMeta[d]) s.shiftMeta[d].isLocked = false;
+        };
 
         // 指定シフト種別の不足数（予はカウントしない＝その種別の実勤務のみ数える）
         const shortage = (date, type) => {
@@ -2069,23 +2081,23 @@ export class ShiftEngine {
                         const excess = this.shiftTable
                             .map(s => ({ s, over: restCount(s) - this.getRequiredRest(s) }))
                             .filter(x => x.over > 0 && x.s.shifts[date] === '休'
-                                && freeToChange(x.s, date) && this.isShiftAllowed(x.s, date, type))
+                                && freeToChange(x.s, date) && allowedIgnoringLock(x.s, date, type))
                             .sort((a, b) => b.over - a.over);
                         if (excess.length) {
-                            excess[0].s.shifts[date] = type;
+                            deploy(excess[0].s, date, type);
                             this.log(`  -> [不足:${type}] 公休過多の ${excess[0].s.name} を ${date}`);
                             filled = true; need--; continue;
                         }
                         // ② 予備の人の '予' を 勤務に（主任・サ責は使用回数が少ない人優先＝均等）
                         const yobi = this.shiftTable
-                            .filter(s => usableYobi(s, date) && this.isShiftAllowed(s, date, type))
+                            .filter(s => usableYobi(s, date) && allowedIgnoringLock(s, date, type))
                             .sort((a, b) => {
                                 const ar = isRole(a) ? 0 : 1, br = isRole(b) ? 0 : 1;
                                 if (ar !== br) return ar - br;            // 役職者を優先的に動かす
                                 return (roleUse.get(a) || 0) - (roleUse.get(b) || 0); // 均等
                             });
                         if (yobi.length) {
-                            yobi[0].shifts[date] = type;
+                            deploy(yobi[0], date, type);
                             if (isRole(yobi[0])) roleUse.set(yobi[0], (roleUse.get(yobi[0]) || 0) + 1);
                             this.log(`  -> [不足:${type}] 予備の ${yobi[0].name} を ${date}`);
                             filled = true; need--; continue;
@@ -2094,7 +2106,7 @@ export class ShiftEngine {
                         //    予を多く持つ人（主任・サ責ら）優先。これで予備不在の日も埋まる。
                         const swapCand = this.shiftTable
                             .filter(s => !isExclusive(s) && s.shifts[date] === '休'
-                                && !meta(s, date).isPreference && this.isShiftAllowed(s, date, type)
+                                && !meta(s, date).isPreference && allowedIgnoringLock(s, date, type)
                                 && this.dates.some(d2 => d2 !== date && usableYobi(s, d2)))
                             .sort((a, b) => {
                                 const ay = this.dates.filter(d2 => a.shifts[d2] === '予').length;
@@ -2103,9 +2115,9 @@ export class ShiftEngine {
                             });
                         if (swapCand.length) {
                             const s = swapCand[0];
-                            s.shifts[date] = type;
+                            deploy(s, date, type);
                             const yd = this.dates.find(d2 => d2 !== date && usableYobi(s, d2));
-                            if (yd) s.shifts[yd] = '休'; // 公休数を保つため別の予を休に
+                            if (yd) { s.shifts[yd] = '休'; if (s.shiftMeta[yd]) s.shiftMeta[yd].isLocked = false; } // 公休数を保つため別の予を休に
                             this.log(`  -> [不足:${type}] スワップで ${s.name} を ${date}（${yd}の予を休に振替）`);
                             filled = true; need--; continue;
                         }
