@@ -2023,61 +2023,75 @@ export class ShiftEngine {
         });
     }
     step9_5_ChiefAdjustment() {
-        this.log("Step 9.5: 調整フェーズ（日勤不足の穴埋め＋公休バランス）...");
+        this.log("Step 9.5: 調整フェーズ（全勤務の不足穴埋め＋公休バランス）...");
         const reqSheet = this.data['要員数'];
 
         const isMark = (v) => v === true || v === '〇' || v === 'TRUE';
         const isChief = (s) => isMark(s['主任']);
         const isSekinin = (s) => isMark(s['サ責']);
         const isExclusive = (s) => this.isStaffExclusive(s);
+        const isRole = (s) => isChief(s) || isSekinin(s);
         const meta = (s, d) => s.shiftMeta[d] || {};
         const freeToChange = (s, d) => !meta(s, d).isPreference && !meta(s, d).isLocked;
         const restCount = (s) => this.dates.reduce((n, d) => (s.shifts[d] === '公' || s.shifts[d] === '休') ? n + 1 : n, 0);
 
-        // 日勤の不足数（予はカウントしない＝'日'のみ数える）
-        const dayShortage = (date) => {
+        // 指定シフト種別の不足数（予はカウントしない＝その種別の実勤務のみ数える）
+        const shortage = (date, type) => {
             if (!reqSheet) return 0;
             const nd = this.normalizeDateStr(date);
             const row = reqSheet.find(r => this.normalizeDateStr(r['日付']) === nd);
             if (!row) return 0;
-            const reqNum = parseInt(row['日勤必要'] || row['日必要'] || row['日'] || 0, 10);
+            let reqVal = 0;
+            if (type === '早') reqVal = row['早番必要'] || row['早必要'] || row['早'] || 0;
+            if (type === '日') reqVal = row['日勤必要'] || row['日必要'] || row['日'] || 0;
+            if (type === '遅') reqVal = row['遅番必要'] || row['遅必要'] || row['遅'] || 0;
+            if (type === '夜') reqVal = row['夜勤必要'] || row['夜必要'] || row['夜'] || 0;
+            const reqNum = parseInt(reqVal, 10);
             if (reqNum <= 0) return 0;
-            const current = this.shiftTable.filter(s => s.shifts[date] === '日').length;
+            const current = this.shiftTable.filter(s => s.shifts[date] === type).length;
             return reqNum - current;
         };
 
-        // ---- A. 日勤の不足を埋める：①公休過多の人 → ②主任・サ責の予（均等）----
-        const roleUse = new Map(); // 主任・サ責の予→勤務に変えた回数（均等配分用）
-        for (let loop = 0; loop < 5; loop++) {
+        // ---- A. 不足を埋めて黄色をなくす：早/日/遅/夜すべて ----
+        //   ① 公休過多の人（休→勤務／本人の過多も解消）→ ② 予備の人（予→勤務／主任・サ責は均等）
+        //   予→勤務は連勤に影響しない（予はもともと出勤扱い）ので確実に埋まる。
+        const roleUse = new Map();
+        for (let loop = 0; loop < 8; loop++) {
             let filled = false;
             this.dates.forEach(date => {
-                let need = dayShortage(date);
-                let guard = 0;
-                while (need > 0 && guard++ < 30) {
-                    // ① 公休過多（休>目標）の人の '休' を '日' に（過多が大きい人から）
-                    const excess = this.shiftTable
-                        .map(s => ({ s, over: restCount(s) - this.getRequiredRest(s) }))
-                        .filter(x => x.over > 0 && x.s.shifts[date] === '休'
-                            && freeToChange(x.s, date) && this.isShiftAllowed(x.s, date, '日'))
-                        .sort((a, b) => b.over - a.over);
-                    if (excess.length) {
-                        excess[0].s.shifts[date] = '日';
-                        this.log(`  -> [日勤不足] 公休過多の ${excess[0].s.name} を ${date} に日勤`);
-                        filled = true; need--; continue;
+                ['日', '早', '遅', '夜'].forEach(type => {
+                    let need = shortage(date, type);
+                    let guard = 0;
+                    while (need > 0 && guard++ < 40) {
+                        // ① 公休過多（休>目標）の人の '休' を 勤務に（過多が大きい人から）
+                        const excess = this.shiftTable
+                            .map(s => ({ s, over: restCount(s) - this.getRequiredRest(s) }))
+                            .filter(x => x.over > 0 && x.s.shifts[date] === '休'
+                                && freeToChange(x.s, date) && this.isShiftAllowed(x.s, date, type))
+                            .sort((a, b) => b.over - a.over);
+                        if (excess.length) {
+                            excess[0].s.shifts[date] = type;
+                            this.log(`  -> [不足:${type}] 公休過多の ${excess[0].s.name} を ${date}`);
+                            filled = true; need--; continue;
+                        }
+                        // ② 予備の人の '予' を 勤務に（主任・サ責は使用回数が少ない人優先＝均等）
+                        const yobi = this.shiftTable
+                            .filter(s => s.shifts[date] === '予'
+                                && freeToChange(s, date) && this.isShiftAllowed(s, date, type))
+                            .sort((a, b) => {
+                                const ar = isRole(a) ? 0 : 1, br = isRole(b) ? 0 : 1;
+                                if (ar !== br) return ar - br;            // 役職者を優先的に動かす
+                                return (roleUse.get(a) || 0) - (roleUse.get(b) || 0); // 均等
+                            });
+                        if (yobi.length) {
+                            yobi[0].shifts[date] = type;
+                            if (isRole(yobi[0])) roleUse.set(yobi[0], (roleUse.get(yobi[0]) || 0) + 1);
+                            this.log(`  -> [不足:${type}] 予備の ${yobi[0].name} を ${date}`);
+                            filled = true; need--; continue;
+                        }
+                        break; // これ以上は埋められない（有資格者がいない等）
                     }
-                    // ② 主任・サ責の '予' を '日' に（使用回数が少ない人優先＝均等）
-                    const roleCands = this.shiftTable
-                        .filter(s => (isChief(s) || isSekinin(s)) && s.shifts[date] === '予'
-                            && freeToChange(s, date) && this.isShiftAllowed(s, date, '日'))
-                        .sort((a, b) => (roleUse.get(a) || 0) - (roleUse.get(b) || 0));
-                    if (roleCands.length) {
-                        roleCands[0].shifts[date] = '日';
-                        roleUse.set(roleCands[0], (roleUse.get(roleCands[0]) || 0) + 1);
-                        this.log(`  -> [日勤不足] 主任/サ責 ${roleCands[0].name} の予を ${date} に日勤`);
-                        filled = true; need--; continue;
-                    }
-                    break; // これ以上は埋められない
-                }
+                });
             });
             if (!filled) break;
         }

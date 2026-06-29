@@ -96,7 +96,8 @@ const MainApp = () => {
       // We need to capture them to show in table
       setDates(engine.dates);
       setLogs(result.logs);
-      alert("シフト作成が完了しました！");
+      // 完了時のブロッキングなalertは廃止（表が表示されること自体が完了の合図）。
+      console.log("[ShiftEngine] シフト作成が完了しました");
     } else {
       setLogs(result.logs || []);
       alert("エラーが発生しました。ログを確認してください。");
