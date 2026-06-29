@@ -2089,6 +2089,25 @@ export class ShiftEngine {
                             this.log(`  -> [不足:${type}] 予備の ${yobi[0].name} を ${date}`);
                             filled = true; need--; continue;
                         }
+                        // ③ スワップ補完：その日が休の人を勤務にし、別の日の予を休へ振替（公休数は不変）。
+                        //    予を多く持つ人（主任・サ責ら）優先。これで予備不在の日も埋まる。
+                        const swapCand = this.shiftTable
+                            .filter(s => !isExclusive(s) && s.shifts[date] === '休'
+                                && freeToChange(s, date) && this.isShiftAllowed(s, date, type)
+                                && this.dates.some(d2 => d2 !== date && s.shifts[d2] === '予' && freeToChange(s, d2)))
+                            .sort((a, b) => {
+                                const ay = this.dates.filter(d2 => a.shifts[d2] === '予').length;
+                                const by = this.dates.filter(d2 => b.shifts[d2] === '予').length;
+                                return by - ay; // 予が多い人優先
+                            });
+                        if (swapCand.length) {
+                            const s = swapCand[0];
+                            s.shifts[date] = type;
+                            const yd = this.dates.find(d2 => d2 !== date && s.shifts[d2] === '予' && freeToChange(s, d2));
+                            if (yd) s.shifts[yd] = '休'; // 公休数を保つため別の予を休に
+                            this.log(`  -> [不足:${type}] スワップで ${s.name} を ${date}（${yd}の予を休に振替）`);
+                            filled = true; need--; continue;
+                        }
                         break; // これ以上は埋められない（有資格者がいない等）
                     }
                 });
