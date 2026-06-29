@@ -2033,6 +2033,8 @@ export class ShiftEngine {
         const isRole = (s) => isChief(s) || isSekinin(s);
         const meta = (s, d) => s.shiftMeta[d] || {};
         const freeToChange = (s, d) => !meta(s, d).isPreference && !meta(s, d).isLocked;
+        // 予備(予)は「展開するための待機」なので、ロックされていても勤務に回してよい（希望のみ保護）。
+        const usableYobi = (s, d) => s.shifts[d] === '予' && !meta(s, d).isPreference;
         const restCount = (s) => this.dates.reduce((n, d) => (s.shifts[d] === '公' || s.shifts[d] === '休') ? n + 1 : n, 0);
 
         // 指定シフト種別の不足数（予はカウントしない＝その種別の実勤務のみ数える）
@@ -2076,8 +2078,7 @@ export class ShiftEngine {
                         }
                         // ② 予備の人の '予' を 勤務に（主任・サ責は使用回数が少ない人優先＝均等）
                         const yobi = this.shiftTable
-                            .filter(s => s.shifts[date] === '予'
-                                && freeToChange(s, date) && this.isShiftAllowed(s, date, type))
+                            .filter(s => usableYobi(s, date) && this.isShiftAllowed(s, date, type))
                             .sort((a, b) => {
                                 const ar = isRole(a) ? 0 : 1, br = isRole(b) ? 0 : 1;
                                 if (ar !== br) return ar - br;            // 役職者を優先的に動かす
@@ -2093,8 +2094,8 @@ export class ShiftEngine {
                         //    予を多く持つ人（主任・サ責ら）優先。これで予備不在の日も埋まる。
                         const swapCand = this.shiftTable
                             .filter(s => !isExclusive(s) && s.shifts[date] === '休'
-                                && freeToChange(s, date) && this.isShiftAllowed(s, date, type)
-                                && this.dates.some(d2 => d2 !== date && s.shifts[d2] === '予' && freeToChange(s, d2)))
+                                && !meta(s, date).isPreference && this.isShiftAllowed(s, date, type)
+                                && this.dates.some(d2 => d2 !== date && usableYobi(s, d2)))
                             .sort((a, b) => {
                                 const ay = this.dates.filter(d2 => a.shifts[d2] === '予').length;
                                 const by = this.dates.filter(d2 => b.shifts[d2] === '予').length;
@@ -2103,7 +2104,7 @@ export class ShiftEngine {
                         if (swapCand.length) {
                             const s = swapCand[0];
                             s.shifts[date] = type;
-                            const yd = this.dates.find(d2 => d2 !== date && s.shifts[d2] === '予' && freeToChange(s, d2));
+                            const yd = this.dates.find(d2 => d2 !== date && usableYobi(s, d2));
                             if (yd) s.shifts[yd] = '休'; // 公休数を保つため別の予を休に
                             this.log(`  -> [不足:${type}] スワップで ${s.name} を ${date}（${yd}の予を休に振替）`);
                             filled = true; need--; continue;
