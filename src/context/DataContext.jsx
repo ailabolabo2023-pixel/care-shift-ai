@@ -1,5 +1,6 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { syncStaffToForm } from '../utils/staffSync';
+import { schedulePush } from '../lib/cloudSync';
 
 const DataContext = createContext();
 
@@ -63,7 +64,7 @@ export const DataProvider = ({ children }) => {
         }
     }, []);
 
-    // Save to LocalStorage when essential data changes
+    // Save to LocalStorage when essential data changes（さらにクラウドへも同期）
     useEffect(() => {
         if (excelData) {
             localStorage.setItem("care_shift_ai_data", JSON.stringify({
@@ -77,6 +78,8 @@ export const DataProvider = ({ children }) => {
                 viewMode,
                 monthlySettings
             }));
+            // ログイン中ならクラウドへ保存（別PCと共有）。未ログインなら何もしない。
+            schedulePush();
         }
     }, [excelData, fileName, facilityName, targetDate, shiftTable, dates, logs, viewMode, monthlySettings]);
 

@@ -6,8 +6,10 @@ import HistoryView from './views/HistoryView';
 import DashboardView from './views/DashboardView';
 import AdminView from './views/AdminView';
 import { ShiftEngine } from './logic/ShiftEngine';
-import { Layers, Table, RefreshCw, ChevronLeft, LayoutDashboard, Settings, History, BarChart3 } from 'lucide-react';
+import { Layers, Table, RefreshCw, ChevronLeft, LayoutDashboard, Settings, History, BarChart3, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import AuthGate from './components/AuthGate';
+import { supabase } from './lib/supabase';
 
 const MainApp = () => {
   const {
@@ -200,11 +202,11 @@ const MainApp = () => {
             </div>
 
             <button
-              disabled={true} // Future Feature
-              className="p-2 text-stone-400 hover:text-stone-600 hover:bg-stone-100 rounded-full"
-              title="管理設定（未実装）"
+              onClick={async () => { if (window.confirm('ログアウトしますか？')) { await supabase.auth.signOut(); } }}
+              className="flex items-center gap-1.5 p-2 px-3 text-stone-500 hover:text-red-600 hover:bg-red-50 rounded-full text-sm font-bold"
+              title="ログアウト"
             >
-              <Settings className="w-5 h-5" />
+              <LogOut className="w-4 h-4" /> ログアウト
             </button>
           </div>
         </div>
@@ -296,9 +298,11 @@ const MainApp = () => {
 // Root Component
 function App() {
   return (
-    <DataProvider>
-      <MainApp />
-    </DataProvider>
+    <AuthGate>
+      <DataProvider>
+        <MainApp />
+      </DataProvider>
+    </AuthGate>
   );
 }
 

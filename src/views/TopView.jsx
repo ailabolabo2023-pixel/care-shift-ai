@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useData } from '../context/DataContext';
 import { motion } from 'framer-motion';
-import { ArrowRight, BookOpen, Building2, Calendar, ClipboardList, Users } from 'lucide-react';
+import { ArrowRight, BookOpen, Building2, Calendar, ClipboardList, Users, LogOut } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
 const TopView = () => {
     const {
@@ -182,7 +183,7 @@ const TopView = () => {
                 </div>
             </motion.div>
 
-            <div className="absolute top-6 right-6 z-20">
+            <div className="absolute top-6 right-6 z-20 flex items-center gap-2">
                 <a
                     href="/manual.pdf"
                     target="_blank"
@@ -192,6 +193,14 @@ const TopView = () => {
                     <BookOpen className="w-5 h-5" />
                     使用ガイド
                 </a>
+                <button
+                    onClick={async () => { if (window.confirm('ログアウトしますか？')) { await supabase.auth.signOut(); } }}
+                    className="flex items-center gap-2 px-4 py-2 bg-white/85 backdrop-blur-md rounded-full shadow-sm text-stone-600 font-medium hover:bg-white hover:text-red-600 transition-colors"
+                    title="ログアウト"
+                >
+                    <LogOut className="w-5 h-5" />
+                    ログアウト
+                </button>
             </div>
 
             <footer className="absolute bottom-4 text-stone-500 text-xs text-center w-full">
