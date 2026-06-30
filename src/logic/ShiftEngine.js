@@ -2389,6 +2389,29 @@ export class ShiftEngine {
                 let swapped = false;
                 for (const d of dCands) {
                     if (!isRest(A.shifts[d]) || !free(A, d)) continue;
+
+                    // (1) 待機系(事務員・サ責・管理者・施設長・主任)のみ：同一人で 休↔予 を
+                    //     入れ替え。予(待機)は要員数に非カウントで完全に人員数中立、かつ予は
+                    //     これらの職種の通常勤務なので連休を確実に割れる。一般介護職の休を
+                    //     勝手に予(待機)化はしない（別クレーム回避）。
+                    const isStandby = isMark(A['事務員']) || isMark(A['サ責']) || isMark(A['管理者']) || isMark(A['施設長']) || isMark(A['主任']);
+                    const di = this.dates.indexOf(d);
+                    const prevBase = di > 0 ? baseOf(A.shifts[this.dates[di - 1]]) : null;
+                    // 夜勤明けの休（前日が夜/明）は休のまま残す
+                    if (isStandby && prevBase !== '夜' && prevBase !== '明') {
+                        for (const d2 of this.dates) {
+                            if (d2 === d) continue;
+                            if (A.shifts[d2] !== '予') continue;
+                            if (!free(A, d2)) continue;
+                            const oAd = A.shifts[d], oAd2 = A.shifts[d2];
+                            A.shifts[d] = '予'; A.shifts[d2] = '休';
+                            if (analyze(A).runs3 < aInfo.runs3) { changed = true; swapped = true; break; }
+                            A.shifts[d] = oAd; A.shifts[d2] = oAd2;
+                        }
+                    }
+                    if (swapped) break;
+
+                    // (2) 一般職（予を持たない）向け：人員数を崩さない2人×2日の入れ替え。
                     for (const B of targets) {
                         if (B === A) continue;
                         const X = baseOf(B.shifts[d]);
