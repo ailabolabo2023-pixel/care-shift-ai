@@ -4,7 +4,7 @@ import StaffTable from '../components/admin/StaffTable';
 import RequirementsTable from '../components/admin/RequirementsTable';
 import PreferencesTable from '../components/admin/PreferencesTable';
 import CarryOverTable from '../components/admin/CarryOverTable';
-import { Users, Calendar, Timer, Smartphone, Download, Link2, Copy, Check, ExternalLink } from 'lucide-react';
+import { Users, Calendar, Timer, Smartphone, Download, Link2, Copy, Check, ExternalLink, Building2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { fetchFormResponses, buildPreferencesFromForm, DEFAULT_FORM_CSV_URL } from '../utils/formImport';
 import { getFacilityId } from '../lib/facility';
@@ -92,7 +92,14 @@ const AdminView = ({ setMainTab }) => {
         { id: 'requirements', label: '要員設定', icon: Users, component: RequirementsTable, dataKey: getRequirementsKey() },
         { id: 'preferences', label: '希望休・条件', icon: Calendar, component: PreferencesTable, dataKey: getPreferencesKey() },
         { id: 'carryover', label: '繰越設定', icon: Timer, component: CarryOverTable, dataKey: getCarryOverKey() },
+        { id: 'rules', label: '施設ルール', icon: Building2 },
     ];
+
+    // 施設別ルール（この施設のデータに保存。デフォルトはOFF＝他施設に影響なし）
+    const facilityRules = excelData.facilityRules || {};
+    const toggleRule = (key) => {
+        updateSheetData('facilityRules', { ...facilityRules, [key]: !facilityRules[key] });
+    };
 
     const ActiveComponent = tabs.find(t => t.id === activeTab)?.component || StaffTable;
     const activeDataKey = tabs.find(t => t.id === activeTab)?.dataKey;
@@ -251,15 +258,61 @@ const AdminView = ({ setMainTab }) => {
                         exit={{ opacity: 0, y: -5 }}
                         transition={{ duration: 0.2 }}
                     >
-                        <ActiveComponent
-                            data={excelData[activeDataKey] || []}
-                            masterData={excelData['マスタ'] || []}
-                            currentMonth={currentMonth}
-                            onUpdate={handleUpdate}
-                            monthlySettings={excelData.monthlySettings || monthlySettings} // Use context value if not in excelData (backward compat)
-                            updateMonthlySettings={updateMonthlySettings}
-                            setActiveTab={setMainTab}
-                        />
+                        {activeTab === 'rules' ? (
+                            <div className="p-4 space-y-4 max-w-2xl">
+                                <div className="flex items-center gap-2 text-stone-700 font-bold text-lg">
+                                    <Building2 size={20} /> この施設のシフトルール
+                                </div>
+                                <p className="text-xs text-stone-500 leading-relaxed">
+                                    施設ごとに必要な特別ルールです。<b>この施設だけ</b>に保存され、他の施設には影響しません。
+                                    変更後は「シフトを再生成」してください。
+                                </p>
+
+                                <label className="flex items-start gap-3 p-4 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 cursor-pointer transition-colors">
+                                    <input
+                                        type="checkbox"
+                                        checked={!!facilityRules.officeClerkCoverage}
+                                        onChange={() => toggleRule('officeClerkCoverage')}
+                                        className="mt-1 w-5 h-5 accent-orange-600"
+                                    />
+                                    <div>
+                                        <div className="font-bold text-stone-700">事務所を空にしない（事務員）</div>
+                                        <div className="text-sm text-stone-500">
+                                            毎日、事務員のうち最低1名が出勤（待機=予を含む）になるように調整します。
+                                        </div>
+                                    </div>
+                                </label>
+
+                                <label className="flex items-start gap-3 p-4 rounded-xl border border-stone-200 bg-white hover:bg-stone-50 cursor-pointer transition-colors">
+                                    <input
+                                        type="checkbox"
+                                        checked={!!facilityRules.roleCoverage}
+                                        onChange={() => toggleRule('roleCoverage')}
+                                        className="mt-1 w-5 h-5 accent-orange-600"
+                                    />
+                                    <div>
+                                        <div className="font-bold text-stone-700">事業所を空にしない（サ責・管理者）</div>
+                                        <div className="text-sm text-stone-500">
+                                            毎日、サ責または管理者のうち最低1名が出勤になるように調整します。
+                                        </div>
+                                    </div>
+                                </label>
+
+                                <p className="text-xs text-stone-400">
+                                    ※ いずれも、必要数の中で休を別日へ振り替えてカバーします。振替先が無い日は出勤を優先します。
+                                </p>
+                            </div>
+                        ) : (
+                            <ActiveComponent
+                                data={excelData[activeDataKey] || []}
+                                masterData={excelData['マスタ'] || []}
+                                currentMonth={currentMonth}
+                                onUpdate={handleUpdate}
+                                monthlySettings={excelData.monthlySettings || monthlySettings} // Use context value if not in excelData (backward compat)
+                                updateMonthlySettings={updateMonthlySettings}
+                                setActiveTab={setMainTab}
+                            />
+                        )}
                     </motion.div>
                 </AnimatePresence>
             </div>

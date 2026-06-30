@@ -434,6 +434,9 @@ export class ShiftEngine {
             // 研修生の公休を月全体で必要数ちょうどに整える（研修期間が休だらけになる
             // のを防ぎ、研修後の休と合算して二重計上しないよう、調整フェーズ後に逆算）。
             this.step9_6_BalanceTraineeRest();
+            // 施設別ルール：事務所/事業所を空にしないカバー（管理設定でON/OFF）。
+            this.step9_7_EnsureOfficeCoverage();
+            this.step9_8_EnsureRoleCoverage();
             this.step10_FinalizeValidation();
 
             this.log("All steps completed successfully.");
@@ -1263,6 +1266,54 @@ export class ShiftEngine {
             return (bNight ? 1 : 0) - (aNight ? 1 : 0);
         });
 
+        // ★夜勤専従の偏り防止（全施設共通）：専属の夜勤可スタッフを人ごとに日付順で
+        //   逐次に埋めると同じ日へ集中しがち。夜勤回数を均等化しながら割り当てることで
+        //   日付（曜日）を自然に分散させる。要員数が複数必要な日は重複してよい。
+        const exNightStaff = exclusiveStaff.filter(s =>
+            s['夜可'] === true || s['夜可'] === "TRUE" || s['夜可'] === 1 || String(s['夜可']).trim() === "〇"
+        );
+        if (exNightStaff.length > 0) {
+            const nightCounts = {};
+            exNightStaff.forEach(s => { nightCounts[s.name] = 0; });
+
+            this.dates.forEach((date, i) => {
+                const needed = reqMap[date]?.['夜'] || 0;
+                if (needed <= 0) return;
+
+                const current = this.shiftTable.filter(s => s.shifts[date] === '夜').length;
+                let need = needed - current;
+                if (need <= 0) return;
+
+                let cand = exNightStaff.filter(s => {
+                    if (s.shifts[date] !== "") return false;
+                    if (!this.isShiftAllowed(s, date, '夜')) return false;
+                    const nd = this.dates[i + 1];
+                    // 翌日（明が入る枠）が埋まっていて明でないなら不可
+                    if (nd && s.shifts[nd] !== "" && s.shifts[nd] !== "明") return false;
+                    return true;
+                });
+
+                while (need > 0 && cand.length > 0) {
+                    // 自分の夜勤回数が最も少ない人を優先（均等化＝日付分散）。同数は乱択。
+                    cand.sort((a, b) => nightCounts[a.name] - nightCounts[b.name]);
+                    const best = nightCounts[cand[0].name];
+                    const pool = cand.filter(s => nightCounts[s.name] === best);
+                    const chosen = pool[Math.floor(Math.random() * pool.length)];
+
+                    const d1 = this.dates[i + 1];
+                    const d2 = this.dates[i + 2];
+                    this.applyNightShiftSet(chosen, date);
+                    chosen.shiftMeta[date].isLocked = true;
+                    if (d1) chosen.shiftMeta[d1].isLocked = true;
+                    if (d2) chosen.shiftMeta[d2].isLocked = true;
+
+                    nightCounts[chosen.name]++;
+                    need--;
+                    cand = cand.filter(c => c !== chosen);
+                }
+            });
+        }
+
         exclusiveStaff.forEach(staff => {
             const canShift = (key) => staff[key] === true || staff[key] === "TRUE" || staff[key] === 1 || String(staff[key]).trim() === "〇";
             const bands = [];
@@ -1271,30 +1322,7 @@ export class ShiftEngine {
             if (canShift('遅可')) bands.push('遅');
             if (canShift('夜可')) bands.push('夜');
 
-            // Night Shift Assignment for Exclusive
-            if (bands.includes('夜')) {
-                for (let i = 0; i < this.dates.length; i++) {
-                    const date = this.dates[i];
-                    if (staff.shifts[date] !== "") continue;
-
-                    const needed = reqMap[date]?.['夜'] || 0;
-                    const counts = getCurrentCounts();
-                    const current = counts[date]['夜'];
-
-                    if (current < needed) {
-                        if (this.isShiftAllowed(staff, date, '夜')) {
-                            // Logic handles EOM now
-                            const d1 = this.dates[i + 1];
-                            const d2 = this.dates[i + 2];
-
-                            this.applyNightShiftSet(staff, date);
-                            staff.shiftMeta[date].isLocked = true;
-                            if (d1) staff.shiftMeta[d1].isLocked = true;
-                            if (d2) staff.shiftMeta[d2].isLocked = true;
-                        }
-                    }
-                }
-            }
+            // 夜勤は上の集合パスで割当済み（ここでは日勤帯のみ）
 
             // Day Shift Assignment
             const dayBands = bands.filter(b => b !== '夜');
@@ -2185,6 +2213,84 @@ export class ShiftEngine {
                 }
             }
         });
+    }
+
+    // ある職員グループが「毎日最低1名は在所（出勤）」になるよう調整する共通処理。
+    //   在所＝休/公/明/空 以外（予＝待機も在所扱い）。
+    //   全員が休の日があれば、休が多い人の『予』の日と当日の休を入れ替えて在所させる
+    //   （公休数は維持）。振替先が無い時のみ、在所を優先して当日を予にする（公休が1減）。
+    ensureGroupCoverage(members, label) {
+        if (!members || members.length === 0) return;
+        const isRest = (s) => s === '公' || s === '休';
+        const isPresent = (s) => !!s && s !== '休' && s !== '公' && s !== '明';
+        const metaOf = (st, d) => st.shiftMeta[d] || {};
+        const restCount = (st) => this.dates.reduce((n, d) => isRest(st.shifts[d]) ? n + 1 : n, 0);
+
+        let guard = 0;
+        let progressed = true;
+        while (progressed && guard < this.dates.length * 2) {
+            guard++;
+            progressed = false;
+
+            for (let i = 0; i < this.dates.length; i++) {
+                const d = this.dates[i];
+                const present = members.filter(st => isPresent(st.shifts[d]));
+                if (present.length >= 1) continue;
+
+                // この日は全員不在。希望でない休を持つ人を振替候補に。
+                const flipCands = members.filter(st => isRest(st.shifts[d]) && !metaOf(st, d).isPreference);
+                if (flipCands.length === 0) continue; // 全員希望休等で直せない
+
+                flipCands.sort((a, b) => restCount(b) - restCount(a)); // 休が多い人優先
+
+                let done = false;
+                for (const st of flipCands) {
+                    // 振替先 d2：本人が『予』で希望でない日かつ、本人を外しても他メンバーが在所する日
+                    const d2 = this.dates.find(dd => {
+                        if (dd === d) return false;
+                        if (st.shifts[dd] !== '予') return false; // 実勤務は動かさない（予のみ振替）
+                        if (metaOf(st, dd).isPreference) return false;
+                        return members.some(o => o !== st && isPresent(o.shifts[dd]));
+                    });
+                    if (d2) {
+                        st.shifts[d] = '予';
+                        st.shiftMeta[d] = { ...(st.shiftMeta[d] || {}), isLocked: true };
+                        st.shifts[d2] = '休';
+                        st.shiftMeta[d2] = { ...(st.shiftMeta[d2] || {}), isLocked: true };
+                        progressed = true;
+                        done = true;
+                        break;
+                    }
+                }
+                if (!done) {
+                    const st = flipCands[0];
+                    st.shifts[d] = '予';
+                    st.shiftMeta[d] = { ...(st.shiftMeta[d] || {}), isLocked: true };
+                    this.log(`WARN: ${label}カバー: ${d} は振替先が無いため ${st.name} を予に（公休が1減）`);
+                    progressed = true;
+                }
+            }
+        }
+    }
+
+    // Step 9.7: 事務員カバー（施設別ルール）。事務所を空にしないため毎日最低1名を在所。
+    step9_7_EnsureOfficeCoverage() {
+        const rules = this.data.facilityRules || {};
+        if (!rules.officeClerkCoverage) return;
+        this.log("Step 9.7: 事務員の在所カバー（毎日最低1名）...");
+        const isMark = (v) => v === true || v === '〇' || v === 'TRUE' || v === 1 || v === '1';
+        const clerks = this.shiftTable.filter(s => isMark(s['事務員']));
+        this.ensureGroupCoverage(clerks, '事務員');
+    }
+
+    // Step 9.8: サ責・管理者カバー（施設別ルール）。事業所を空にしないため毎日最低1名を在所。
+    step9_8_EnsureRoleCoverage() {
+        const rules = this.data.facilityRules || {};
+        if (!rules.roleCoverage) return;
+        this.log("Step 9.8: サ責・管理者の在所カバー（毎日最低1名）...");
+        const isMark = (v) => v === true || v === '〇' || v === 'TRUE' || v === 1 || v === '1';
+        const members = this.shiftTable.filter(s => isMark(s['サ責']) || isMark(s['管理者']));
+        this.ensureGroupCoverage(members, 'サ責/管理者');
     }
 
     step10_FinalizeValidation() {
