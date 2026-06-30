@@ -434,6 +434,8 @@ export class ShiftEngine {
             // 研修生の公休を月全体で必要数ちょうどに整える（研修期間が休だらけになる
             // のを防ぎ、研修後の休と合算して二重計上しないよう、調整フェーズ後に逆算）。
             this.step9_6_BalanceTraineeRest();
+            // 希望していないのに出る3連休以上を、人員数を崩さず分散（全施設共通）。
+            this.stepSpreadRestDays();
             // 施設別ルール：事務所/事業所を空にしないカバー（管理設定でON/OFF）。
             this.step9_7_EnsureOfficeCoverage();
             this.step9_8_EnsureRoleCoverage();
@@ -2309,6 +2311,118 @@ export class ShiftEngine {
         const isMark = (v) => v === true || v === '〇' || v === 'TRUE' || v === 1 || v === '1';
         const members = this.shiftTable.filter(s => isMark(s['サ責']) || isMark(s['管理者']));
         this.ensureGroupCoverage(members, 'サ責/管理者');
+    }
+
+    // 希望していないのに発生する3連休以上を分散する（全施設共通）。
+    //   仕組み：人員数を崩さない「2人×2日の入れ替え」。
+    //     d :  A=休, B=勤務X   →   A=X,  B=休
+    //     d2:  A=勤務Y, B=休   →   A=休, B=Y
+    //   各日の各勤務帯の人数は不変、A/Bの総休数も不変。Aの連休が割れ、Bは悪化しない。
+    //   希望休/使用不可は触らず、連勤・遅→早・夜明・週勤務上限を崩さず、3連休が
+    //   純減する場合のみ採用する（＝安全な改善のみ）。夜勤専従など専属・研修生は対象外
+    //   （週1夜勤などで長い休が構造的に生じるため）。
+    stepSpreadRestDays() {
+        this.log("Step 9.65: 不要な3連休以上を分散...");
+        const isMark = (v) => v === true || v === '〇' || v === 'TRUE' || v === 1 || v === '1';
+        const isRest = (s) => s === '公' || s === '休';
+        const WORK = ["早", "日", "遅", "夜", "明", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"];
+        const isWork = (s) => WORK.includes(s);
+        const baseOf = (s) => (s && s.includes && s.includes('研修')) ? (s.match(/（(.*?)）/)?.[1]) : s;
+        const SIMPLE = ['早', '日', '遅'];
+
+        const isRole = (st) => isMark(st['サ責']) || isMark(st['施設長']) || isMark(st['事務員']) || isMark(st['管理者']) || isMark(st['主任']);
+        const allowedConsec = (st) => isRole(st) ? 5 : 4;
+        const weekLimit = (st) => { const v = parseInt(st['勤務日数/週'], 10); return v > 0 ? v : 0; };
+        const canDo = (st, band) => isMark(st[band + '可']);
+        const metaOf = (st, d) => st.shiftMeta[d] || {};
+        const free = (st, d) => !metaOf(st, d).isPreference && !metaOf(st, d).isUnavailable && !this.isBeforeEmployment(st, d);
+
+        const analyze = (st) => {
+            let maxStreak = 0, cur = 0, lateEarly = 0, nightDawn = 0, runs3 = 0, restRun = 0;
+            for (let i = 0; i < this.dates.length; i++) {
+                const s = st.shifts[this.dates[i]];
+                if (isWork(s)) { cur++; if (cur > maxStreak) maxStreak = cur; if (restRun >= 3) runs3++; restRun = 0; }
+                else if (isRest(s)) { restRun++; cur = 0; }
+                else { cur = 0; if (restRun >= 3) runs3++; restRun = 0; }
+                if (i > 0) {
+                    const prev = baseOf(st.shifts[this.dates[i - 1]]);
+                    const b = baseOf(s);
+                    if (prev === '遅' && b === '早') lateEarly++;
+                    if (prev === '夜' && s !== '明') nightDawn++;
+                }
+            }
+            if (restRun >= 3) runs3++;
+            let weekBad = false;
+            const lim = weekLimit(st);
+            if (lim > 0) {
+                for (let w = 0; w * 7 < this.dates.length; w++) {
+                    let c = 0;
+                    for (let i = w * 7; i < Math.min(w * 7 + 7, this.dates.length); i++) {
+                        if (isWork(st.shifts[this.dates[i]])) c++;
+                    }
+                    if (c > lim) { weekBad = true; break; }
+                }
+            }
+            return { maxStreak, lateEarly, nightDawn, runs3, weekBad, allowed: allowedConsec(st) };
+        };
+
+        const longRunRestDays = (st) => {
+            const out = [];
+            let runStart = -1, run = 0;
+            for (let i = 0; i <= this.dates.length; i++) {
+                const s = i < this.dates.length ? st.shifts[this.dates[i]] : null;
+                if (i < this.dates.length && isRest(s)) { if (run === 0) runStart = i; run++; }
+                else { if (run >= 3) { for (let k = runStart; k < runStart + run; k++) { if (free(st, this.dates[k])) out.push(this.dates[k]); } } run = 0; }
+            }
+            return out;
+        };
+
+        const targets = this.shiftTable.filter(st => !this.isStaffExclusive(st) && !this.isTraineeStaff(st));
+
+        let pass = 0, changed = true;
+        while (changed && pass < 4) {
+            pass++; changed = false;
+            for (const A of targets) {
+                const aInfo = analyze(A);
+                if (aInfo.runs3 === 0) continue;
+                const dCands = longRunRestDays(A);
+                let swapped = false;
+                for (const d of dCands) {
+                    if (!isRest(A.shifts[d]) || !free(A, d)) continue;
+                    for (const B of targets) {
+                        if (B === A) continue;
+                        const X = baseOf(B.shifts[d]);
+                        if (!SIMPLE.includes(X)) continue;
+                        if (!free(B, d) || !canDo(A, X)) continue;
+                        for (const d2 of this.dates) {
+                            if (d2 === d) continue;
+                            const Y = baseOf(A.shifts[d2]);
+                            if (!SIMPLE.includes(Y)) continue;
+                            if (!isRest(B.shifts[d2])) continue;
+                            if (!free(A, d2) || !free(B, d2) || !canDo(B, Y)) continue;
+
+                            const bBefore = analyze(B);
+                            const oAd = A.shifts[d], oAd2 = A.shifts[d2], oBd = B.shifts[d], oBd2 = B.shifts[d2];
+                            A.shifts[d] = X; A.shifts[d2] = '休'; B.shifts[d] = '休'; B.shifts[d2] = Y;
+                            const aAfter = analyze(A), bAfter = analyze(B);
+                            const ok =
+                                aAfter.maxStreak <= aAfter.allowed && bAfter.maxStreak <= bAfter.allowed &&
+                                aAfter.lateEarly <= aInfo.lateEarly && bAfter.lateEarly <= bBefore.lateEarly &&
+                                aAfter.nightDawn <= aInfo.nightDawn && bAfter.nightDawn <= bBefore.nightDawn &&
+                                !aAfter.weekBad && !bAfter.weekBad &&
+                                (aAfter.runs3 + bAfter.runs3) < (aInfo.runs3 + bBefore.runs3);
+                            if (ok) {
+                                changed = true; swapped = true; break;
+                            } else {
+                                A.shifts[d] = oAd; A.shifts[d2] = oAd2; B.shifts[d] = oBd; B.shifts[d2] = oBd2;
+                            }
+                        }
+                        if (swapped) break;
+                    }
+                    if (swapped) break;
+                }
+            }
+        }
     }
 
     step10_FinalizeValidation() {
