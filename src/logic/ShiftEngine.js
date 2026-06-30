@@ -485,133 +485,83 @@ export class ShiftEngine {
                 staff.shiftMeta[date].isLocked = true;
             });
 
-            // 2. Adjust for Holidays (Monthly Limit)
-            // 日付付き研修生（研修開始日/終了日あり）は休数の調整を通常ロジックに任せるためスキップ。
-            // ※ただし連勤チェック（下の手順3）は全研修生に必ず適用する。
-            if (!this.hasTrainingPeriod(staff)) {
-                let currentRest = 0;
-                this.dates.forEach(d => {
-                    if (staff.shifts[d] === '公' || staff.shifts[d] === '休') currentRest++;
-                });
+            // 2 & 3. 公休の配置（研修期間あり/なし共通）
+            // 研修期間中も「最大4連勤（5連勤目は必ず休）」を守りつつ、
+            // 月内の必要公休数を期間全体へ均等に分散する。
+            //  ・希望休（isPreference）は尊重して上書きしない
+            //  ・研修生＝一般職として連勤上限4
+            //  ・ランダムなswapは行わない（後半への休偏りを防ぐため決定的に配置）
+            const isWork = (s) => ["早", "日", "遅", "夜", "明", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s);
+            const isRest = (s) => s === '公' || s === '休';
 
-                let requiredRest = this.getRequiredRest(staff);
+            // 触ってよいセル＝研修日に研修シフトが入っていて、希望でも使用不可でもないもの
+            const touchableDate = (d) =>
+                this.isTrainingDate(staff, d) &&
+                staff.shifts[d].startsWith('研修') &&
+                !staff.shiftMeta[d].isPreference &&
+                !staff.shiftMeta[d].isUnavailable;
 
-                let diff = requiredRest - currentRest; // Positive = Need more Rest
+            const setRest = (d) => {
+                staff.shifts[d] = '休';
+                staff.shiftMeta[d].isLocked = true;
+            };
 
-                this.log(`  -> Rest Target: ${requiredRest}, Current: ${currentRest}, Need: ${diff}`);
-
-                if (diff > 0) {
-                    // Need to insert '休'
-                    const candidates = this.dates.filter(d =>
-                        staff.shifts[d].startsWith('研修') &&
-                        !staff.shiftMeta[d].isPreference
-                    );
-
-                    // Shuffle
-                    for (let i = candidates.length - 1; i > 0; i--) {
-                        const j = Math.floor(Math.random() * (i + 1));
-                        [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
-                    }
-
-                    for (let k = 0; k < diff && k < candidates.length; k++) {
-                        const d = candidates[k];
-                        staff.shifts[d] = '休';
-                        staff.shiftMeta[d].isLocked = true;
+            // (a) 遅→早の禁則を解消（研修シフト内、希望以外）
+            for (let i = 0; i < this.dates.length - 1; i++) {
+                const nextDate = this.dates[i + 1];
+                if (staff.shifts[this.dates[i]] === '研修（遅）' &&
+                    staff.shifts[nextDate] === '研修（早）' &&
+                    !staff.shiftMeta[nextDate].isPreference) {
+                    if (trainingTypes.includes('研修（日）')) {
+                        staff.shifts[nextDate] = '研修（日）';
+                    } else if (trainingTypes.includes('研修（遅）')) {
+                        staff.shifts[nextDate] = '研修（遅）';
                     }
                 }
             }
 
-            // 3. Validate and Fix Constraints (Safe Loop) — 連勤(最大4)チェックは全研修生に適用
-            // Constraints:
-            // a. Late -> Early Forbidden
-            // b. Max 5 Consecutive Work Days
+            // (b) 必要公休数の不足分を、研修期間全体へ均等配置（区間の中央に置く）
+            const requiredRest = this.getRequiredRest(staff);
+            let currentRest = 0;
+            this.dates.forEach(d => { if (isRest(staff.shifts[d])) currentRest++; });
+            const need = requiredRest - currentRest;
 
-            let safetyLoop = 0;
-            while (safetyLoop < 50) {
-                safetyLoop++;
-                let changed = false;
+            const touchable = this.dates.filter(touchableDate);
+            this.log(`  -> [Trainee ${staff.name}] requiredRest=${requiredRest}, currentRest=${currentRest}, need=${need}, touchable=${touchable.length}`);
 
-                for (let i = 0; i < this.dates.length; i++) {
-                    const date = this.dates[i];
-                    const shift = staff.shifts[date];
-
-                    // Guard: Only touch Training or Rest (non-preference)
-                    if (staff.shiftMeta[date].isPreference) continue;
-                    if (shift !== '休' && !shift.startsWith('研修')) continue;
-
-                    // --- Check Late -> Early ---
-                    if (i < this.dates.length - 1) {
-                        const cur = staff.shifts[this.dates[i]];
-                        const next = staff.shifts[this.dates[i + 1]];
-
-                        if ((cur === '研修（遅）') &&
-                            (next === '研修（早）')) {
-
-                            // Fix: Change Next to Day (or Late) or Swap
-                            // Simple fix: Change Next to '研修（日）' (if allowed) or '研修（遅）'
-                            // Or swap next with a safe shift
-
-                            // Try to changing next to '研修（日）'
-                            if (trainingTypes.includes('研修（日）')) {
-                                staff.shifts[this.dates[i + 1]] = '研修（日）';
-                                changed = true;
-                            } else if (trainingTypes.includes('研修（遅）')) {
-                                staff.shifts[this.dates[i + 1]] = '研修（遅）';
-                                changed = true;
-                            } else {
-                                // Forced Rest if nothing else works? Or swap
-                            }
-                        }
-                    }
-
-                    // --- Check Consecutive Work > 4 ---
-                    // Calculate streak ending at i
-                    // If i is start of a 5th consecutive day
-
-                    let streak = 0;
-                    const isWork = (s) => ["早", "日", "遅", "夜", "明", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s);
-                    // Look back
-                    for (let k = 0; k <= 5; k++) {
-                        if (i - k < 0) break;
-                        const s = staff.shifts[this.dates[i - k]];
-                        if (isWork(s)) {
-                            streak++;
-                        } else {
-                            break;
-                        }
-                    }
-
-                    if (streak > 4) {
-                        // Found 6th day. Need to insert Rest.
-                        // Try to swap current day (i) with a future Rest
-                        // Find a Rest that is NOT locked/preference and swap
-
-                        const restCandidates = [];
-                        for (let r = 0; r < this.dates.length; r++) {
-                            const rd = this.dates[r];
-                            if (staff.shifts[rd] === '休' && !staff.shiftMeta[rd].isPreference) {
-                                restCandidates.push(rd);
-                            }
-                        }
-
-                        if (restCandidates.length > 0) {
-                            // Pick random rest
-                            const swapDate = restCandidates[Math.floor(Math.random() * restCandidates.length)];
-
-                            // Perform Swap
-                            staff.shifts[swapDate] = staff.shifts[date]; // Move work to rest slot
-                            staff.shifts[date] = '休'; // Move rest to here
-
-                            changed = true;
-                        } else {
-                            // No rest to swap? Force Rest here (will increase rest count but better than violation)
-                            staff.shifts[date] = '休';
-                            changed = true;
-                        }
-                    }
+            if (need > 0 && touchable.length > 0) {
+                const n = touchable.length;
+                const picks = Math.min(need, n);
+                const used = new Set();
+                for (let k = 0; k < picks; k++) {
+                    let idx = Math.floor(((k + 0.5) * n) / picks);
+                    if (idx >= n) idx = n - 1;
+                    // 衝突したら近傍の空きへずらす
+                    while (used.has(idx) && idx < n - 1) idx++;
+                    while (used.has(idx) && idx > 0) idx--;
+                    used.add(idx);
+                    setRest(touchable[idx]);
                 }
+            }
 
-                if (!changed) break;
+            // (c) 最大4連勤を保証：5連勤目に当たる日を休にする（決定的・前方走査）
+            //     均等配置(b)で大半は解消済み。残りをここで確実に潰す（休数が必要数を
+            //     多少超えても、連勤違反より休過多を優先＝安全側）。
+            let streak = 0;
+            for (let i = 0; i < this.dates.length; i++) {
+                const d = this.dates[i];
+                const s = staff.shifts[d];
+                if (isWork(s)) {
+                    streak++;
+                    if (streak > 4 && touchableDate(d)) {
+                        setRest(d);
+                        streak = 0;
+                    }
+                    // 触れない日（希望出勤など）は休を入れられないので連勤継続のまま次へ
+                } else {
+                    // 休・公・空き等はカウントをリセット
+                    streak = 0;
+                }
             }
         });
     }
