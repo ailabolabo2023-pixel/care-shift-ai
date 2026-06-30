@@ -2146,6 +2146,8 @@ export class ShiftEngine {
         // 肩代わり役は主任・サ責のみ（保護対象が兼任していても除外）
         const roleHelpers = this.shiftTable.filter(s => (isChief(s) || isSekinin(s)) && !isProtected(s));
         const coverOrder = ['日', '早', '遅']; // 日勤を最優先。夜（夜・明）は肩代わり対象外。
+        // 肩代わりを均等にするため、現在の実勤務数（少ない人ほど優先で肩代わり）を数える。
+        const workCount = (s) => this.dates.reduce((n, d) => (['早', '日', '遅', '夜'].includes(s.shifts[d]) ? n + 1 : n), 0);
         this.shiftTable.forEach(staff => {
             if (roleHelpers.includes(staff)) return;
             if (isProtected(staff)) return; // 事務員・施設長・管理者は触らない
@@ -2157,11 +2159,14 @@ export class ShiftEngine {
                     for (const date of this.dates) {
                         if (staff.shifts[date] !== wantType) continue;
                         if (meta(staff, date).isPreference) continue; // 本人の希望勤務は動かさない（ロックは無視）
-                        // その日に予で待機していて、種別的に入れる主任・サ責を探す。
+                        // その日に予で待機していて、種別的に入れる主任・サ責を全部集める。
                         // 予はロックされていても肩代わりに回してよい（希望のみ保護）。
-                        const helper = roleHelpers.find(c => usableYobi(c, date)
+                        const eligible = roleHelpers.filter(c => usableYobi(c, date)
                             && canCover(c, wantType)
                             && allowedIgnoringLock(c, date, wantType));
+                        // いま実勤務が最も少ない人に肩代わりさせる＝主任・サ責で均等になる。
+                        eligible.sort((a, b) => workCount(a) - workCount(b));
+                        const helper = eligible[0];
                         if (helper) {
                             helper.shifts[date] = wantType; // 主任・サ責が肩代わり（人数は維持）
                             if (helper.shiftMeta[date]) helper.shiftMeta[date].isLocked = false;
