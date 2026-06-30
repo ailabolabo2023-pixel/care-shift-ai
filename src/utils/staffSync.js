@@ -44,3 +44,31 @@ export const syncStaffToForm = (master) => {
         /* 同期失敗はアプリの動作を妨げない */
     }
 };
+
+/**
+ * 希望提出の制限（上限日数・同日重複上限）を、スマホ入力ページ(GAS)へ同期する。
+ * GAS側は施設(fid)ごとに保存し、スマホページの送信バリデーションに使う。
+ * config 例: { maxRequestDays: 3, maxOverlapPerDay: 2 }（0/未設定＝無制限）
+ */
+export const syncConfigToForm = (config) => {
+    const base = getWebAppBase();
+    const fid = getFacilityId();
+    if (!base || !fid) return;
+    try {
+        fetch(base, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+                action: 'setConfig',
+                fid,
+                config: {
+                    maxRequestDays: parseInt(config?.maxRequestDays, 10) || 0,
+                    maxOverlapPerDay: parseInt(config?.maxOverlapPerDay, 10) || 0,
+                },
+            }),
+        }).catch(() => { });
+    } catch (e) {
+        /* 同期失敗はアプリの動作を妨げない */
+    }
+};

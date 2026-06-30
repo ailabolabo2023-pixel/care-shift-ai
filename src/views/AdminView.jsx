@@ -8,7 +8,7 @@ import { Users, Calendar, Timer, Smartphone, Download, Link2, Copy, Check, Exter
 import { motion, AnimatePresence } from 'framer-motion';
 import { fetchFormResponses, buildPreferencesFromForm, DEFAULT_FORM_CSV_URL } from '../utils/formImport';
 import { getFacilityId } from '../lib/facility';
-import { getStaffPageUrl } from '../utils/staffSync';
+import { getStaffPageUrl, syncConfigToForm } from '../utils/staffSync';
 
 
 
@@ -99,6 +99,16 @@ const AdminView = ({ setMainTab }) => {
     const facilityRules = excelData.facilityRules || {};
     const toggleRule = (key) => {
         updateSheetData('facilityRules', { ...facilityRules, [key]: !facilityRules[key] });
+    };
+    // 希望提出の制限（数値）。変更したらスマホ入力ページ(GAS)へも同期する。
+    const setRuleNum = (key, value) => {
+        const v = value === '' ? '' : Math.max(0, parseInt(value, 10) || 0);
+        const next = { ...facilityRules, [key]: v };
+        updateSheetData('facilityRules', next);
+        syncConfigToForm({
+            maxRequestDays: next.maxRequestDays,
+            maxOverlapPerDay: next.maxOverlapPerDay,
+        });
     };
 
     const ActiveComponent = tabs.find(t => t.id === activeTab)?.component || StaffTable;
@@ -301,6 +311,40 @@ const AdminView = ({ setMainTab }) => {
                                 <p className="text-xs text-stone-400">
                                     ※ いずれも、必要数の中で休を別日へ振り替えてカバーします。振替先が無い日は出勤を優先します。
                                 </p>
+
+                                <div className="mt-6 pt-4 border-t border-stone-200">
+                                    <div className="font-bold text-stone-700 mb-1">スマホ希望提出の制限</div>
+                                    <p className="text-xs text-stone-500 mb-3">
+                                        職員がLINEから希望を出すとき、出しすぎ・同日の偏りを防ぎます。<b>0＝制限なし</b>。
+                                        変更すると自動でスマホ入力ページへ反映されます。
+                                    </p>
+
+                                    <div className="flex items-center gap-3 p-3 rounded-xl border border-stone-200 bg-white mb-3">
+                                        <input
+                                            type="number" min="0"
+                                            value={facilityRules.maxRequestDays ?? ''}
+                                            onChange={(e) => setRuleNum('maxRequestDays', e.target.value)}
+                                            className="w-20 px-2 py-1.5 border border-stone-300 rounded text-sm text-center outline-none focus:ring-2 focus:ring-orange-200"
+                                        />
+                                        <div>
+                                            <div className="font-bold text-stone-700 text-sm">希望休の上限日数（1人・1か月）</div>
+                                            <div className="text-xs text-stone-500">「休み希望＋有休」の合計がこの日数を超えると送信できません（超過分は直接担当へ）。</div>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-3 p-3 rounded-xl border border-stone-200 bg-white">
+                                        <input
+                                            type="number" min="0"
+                                            value={facilityRules.maxOverlapPerDay ?? ''}
+                                            onChange={(e) => setRuleNum('maxOverlapPerDay', e.target.value)}
+                                            className="w-20 px-2 py-1.5 border border-stone-300 rounded text-sm text-center outline-none focus:ring-2 focus:ring-orange-200"
+                                        />
+                                        <div>
+                                            <div className="font-bold text-stone-700 text-sm">同じ日の希望休の上限人数</div>
+                                            <div className="text-xs text-stone-500">同じ日に既にこの人数が希望していると送信できません（重複者を表示して相談を促します）。</div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         ) : (
                             <ActiveComponent
