@@ -2098,6 +2098,18 @@ export class ShiftEngine {
             if (s.shiftMeta[d]) s.shiftMeta[d].isLocked = false;
         };
 
+        // ★主任・サ責は「調整で入る」立場：1日に主任1人・サ責1人までしか実勤務(早/日/遅/夜)に
+        //   出さない。これ以上必要でも役職者では埋めず不足のまま（黄色）残す＝役職者を多用しない。
+        const REAL_WORK_TYPES = ['早', '日', '遅', '夜'];
+        const roleInWorkOnDate = (date, roleChk) =>
+            this.shiftTable.filter(s => roleChk(s) && REAL_WORK_TYPES.includes(s.shifts[date])).length;
+        const canDeployRole = (s, date) => {
+            // その人を date に実勤務として足してよいか（主任・サ責の1日上限）。
+            if (isChief(s) && roleInWorkOnDate(date, isChief) >= 1) return false;
+            if (isSekinin(s) && roleInWorkOnDate(date, isSekinin) >= 1) return false;
+            return true;
+        };
+
         // 指定シフト種別の不足数（予はカウントしない＝その種別の実勤務のみ数える）
         const shortage = (date, type) => {
             if (!reqSheet) return 0;
@@ -2130,7 +2142,8 @@ export class ShiftEngine {
                         const excess = this.shiftTable
                             .map(s => ({ s, over: restCount(s) - this.getRequiredRest(s) }))
                             .filter(x => x.over > 0 && x.s.shifts[date] === '休' && !isProtected(x.s)
-                                && freeToChange(x.s, date) && allowedIgnoringLock(x.s, date, type))
+                                && freeToChange(x.s, date) && allowedIgnoringLock(x.s, date, type)
+                                && canDeployRole(x.s, date))
                             .sort((a, b) => b.over - a.over);
                         if (excess.length) {
                             deploy(excess[0].s, date, type);
@@ -2139,7 +2152,8 @@ export class ShiftEngine {
                         }
                         // ② 予備の人の '予' を 勤務に（主任・サ責は使用回数が少ない人優先＝均等）
                         const yobi = this.shiftTable
-                            .filter(s => usableYobi(s, date) && !isProtected(s) && allowedIgnoringLock(s, date, type))
+                            .filter(s => usableYobi(s, date) && !isProtected(s) && allowedIgnoringLock(s, date, type)
+                                && canDeployRole(s, date))
                             .sort((a, b) => {
                                 const ar = isRole(a) ? 0 : 1, br = isRole(b) ? 0 : 1;
                                 if (ar !== br) return ar - br;            // 役職者を優先的に動かす
@@ -2156,6 +2170,7 @@ export class ShiftEngine {
                         const swapCand = this.shiftTable
                             .filter(s => !isExclusive(s) && !isProtected(s) && s.shifts[date] === '休'
                                 && !meta(s, date).isPreference && allowedIgnoringLock(s, date, type)
+                                && canDeployRole(s, date)
                                 && this.dates.some(d2 => d2 !== date && usableYobi(s, d2)))
                             .sort((a, b) => {
                                 const ay = this.dates.filter(d2 => a.shifts[d2] === '予').length;
@@ -2199,7 +2214,8 @@ export class ShiftEngine {
                         // 予はロックされていても肩代わりに回してよい（希望のみ保護）。
                         const eligible = roleHelpers.filter(c => usableYobi(c, date)
                             && canCover(c, wantType)
-                            && allowedIgnoringLock(c, date, wantType));
+                            && allowedIgnoringLock(c, date, wantType)
+                            && canDeployRole(c, date));
                         // いま実勤務が最も少ない人に肩代わりさせる＝主任・サ責で均等になる。
                         eligible.sort((a, b) => workCount(a) - workCount(b));
                         const helper = eligible[0];
