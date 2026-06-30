@@ -431,6 +431,9 @@ export class ShiftEngine {
             // ★調整フェーズは「生成（休の配布まで）」が終わった後に最後に実行する。
             //   ここで日勤不足の穴埋め・公休過多→予(出勤)変換などを行う。
             this.step9_5_ChiefAdjustment();
+            // 研修生の公休を月全体で必要数ちょうどに整える（研修期間が休だらけになる
+            // のを防ぎ、研修後の休と合算して二重計上しないよう、調整フェーズ後に逆算）。
+            this.step9_6_BalanceTraineeRest();
             this.step10_FinalizeValidation();
 
             this.log("All steps completed successfully.");
@@ -485,28 +488,9 @@ export class ShiftEngine {
                 staff.shiftMeta[date].isLocked = true;
             });
 
-            // 2 & 3. 公休の配置（研修期間あり/なし共通）
-            // 研修期間中も「最大4連勤（5連勤目は必ず休）」を守りつつ、
-            // 月内の必要公休数を期間全体へ均等に分散する。
-            //  ・希望休（isPreference）は尊重して上書きしない
-            //  ・研修生＝一般職として連勤上限4
-            //  ・ランダムなswapは行わない（後半への休偏りを防ぐため決定的に配置）
-            const isWork = (s) => ["早", "日", "遅", "夜", "明", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s);
-            const isRest = (s) => s === '公' || s === '休';
-
-            // 触ってよいセル＝研修日に研修シフトが入っていて、希望でも使用不可でもないもの
-            const touchableDate = (d) =>
-                this.isTrainingDate(staff, d) &&
-                staff.shifts[d].startsWith('研修') &&
-                !staff.shiftMeta[d].isPreference &&
-                !staff.shiftMeta[d].isUnavailable;
-
-            const setRest = (d) => {
-                staff.shifts[d] = '休';
-                staff.shiftMeta[d].isLocked = true;
-            };
-
-            // (a) 遅→早の禁則を解消（研修シフト内、希望以外）
+            // 遅→早の禁則を解消（研修シフト内、希望以外）
+            // ※公休（休）の配置は研修後の休が確定してから月全体で行うため、
+            //   ここでは行わない（step9_6_BalanceTraineeRest が担当）。
             for (let i = 0; i < this.dates.length - 1; i++) {
                 const nextDate = this.dates[i + 1];
                 if (staff.shifts[this.dates[i]] === '研修（遅）' &&
@@ -519,50 +503,102 @@ export class ShiftEngine {
                     }
                 }
             }
+        });
+    }
 
-            // (b) 必要公休数の不足分を、研修期間全体へ均等配置（区間の中央に置く）
-            const requiredRest = this.getRequiredRest(staff);
-            let currentRest = 0;
-            this.dates.forEach(d => { if (isRest(staff.shifts[d])) currentRest++; });
-            const need = requiredRest - currentRest;
+    // Step 9.6: 研修生の公休を「月全体で必要公休数ちょうど」に整える。
+    //   研修期間は原則「研修」とし、必要公休は研修後の期間と合わせて配分する。
+    //   研修期間に入れる休は「研修後だけでは足りない分」のみ＝研修期間が休だらけに
+    //   ならない。希望休は尊重し、最大4連勤（一般職）を守る。
+    //   step9（空き→休）と step9.5（調整フェーズ）の後に実行し、研修後の休数が
+    //   確定した状態で逆算する。
+    step9_6_BalanceTraineeRest() {
+        this.log("Step 9.6: 研修生の公休を月全体で調整...");
+        const isWork = (s) => ["早", "日", "遅", "夜", "明", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"].includes(s);
+        const isRest = (s) => s === '公' || s === '休';
 
-            const touchable = this.dates.filter(touchableDate);
-            this.log(`  -> [Trainee ${staff.name}] requiredRest=${requiredRest}, currentRest=${currentRest}, need=${need}, touchable=${touchable.length}`);
+        this.shiftTable.forEach(staff => {
+            if (!this.isTraineeStaff(staff)) return;
 
-            if (need > 0 && touchable.length > 0) {
-                const n = touchable.length;
-                const picks = Math.min(need, n);
-                const used = new Set();
-                for (let k = 0; k < picks; k++) {
-                    let idx = Math.floor(((k + 0.5) * n) / picks);
-                    if (idx >= n) idx = n - 1;
-                    // 衝突したら近傍の空きへずらす
-                    while (used.has(idx) && idx < n - 1) idx++;
-                    while (used.has(idx) && idx > 0) idx--;
-                    used.add(idx);
-                    setRest(touchable[idx]);
-                }
+            const target = this.getRequiredRest(staff);
+
+            // 利用可能日（入職前・使用不可セルは除外）
+            const avail = this.dates.filter(d =>
+                !this.isBeforeEmployment(staff, d) &&
+                !(staff.shiftMeta[d] && staff.shiftMeta[d].isUnavailable)
+            );
+
+            // 調整対象＝研修日のうち希望ではないセル（ここで 研修↔休 を出し入れする）
+            const adjustable = avail.filter(d =>
+                this.isTrainingDate(staff, d) &&
+                !(staff.shiftMeta[d] && staff.shiftMeta[d].isPreference)
+            );
+            const adjSet = new Set(adjustable);
+
+            // 固定の休＝調整対象“以外”の利用可能セルにある休（研修後の休・希望休など）
+            let fixedRest = 0;
+            avail.forEach(d => { if (!adjSet.has(d) && isRest(staff.shifts[d])) fixedRest++; });
+
+            // 研修生が使える研修シフト種別
+            const trainTypes = [];
+            if (staff['早可'] === '〇' || staff['早可'] === true) trainTypes.push('研修（早）');
+            if (staff['日可'] === '〇' || staff['日可'] === true) trainTypes.push('研修（日）');
+            if (staff['遅可'] === '〇' || staff['遅可'] === true) trainTypes.push('研修（遅）');
+            if (trainTypes.length === 0) trainTypes.push('研修（日）');
+            const dayType = trainTypes.includes('研修（日）') ? '研修（日）' : trainTypes[0];
+
+            // 研修期間に入れるべき休の数＝目標 − 研修後等の固定休
+            let restInTraining = target - fixedRest;
+            if (restInTraining < 0) restInTraining = 0;
+            if (restInTraining > adjustable.length) restInTraining = adjustable.length;
+
+            // いったん調整対象を全て研修へ戻す（既存の研修種別は保持。休だったセルは日研修へ）
+            adjustable.forEach(d => {
+                if (!staff.shifts[d].startsWith('研修')) staff.shifts[d] = dayType;
+                staff.shiftMeta[d].isLocked = true;
+            });
+
+            // 休を研修期間全体へ均等配置（区間の中央）
+            const n = adjustable.length;
+            const used = new Set();
+            for (let k = 0; k < restInTraining; k++) {
+                let idx = Math.floor(((k + 0.5) * n) / restInTraining);
+                if (idx >= n) idx = n - 1;
+                while (used.has(idx) && idx < n - 1) idx++;
+                while (used.has(idx) && idx > 0) idx--;
+                used.add(idx);
+                staff.shifts[adjustable[idx]] = '休';
+                staff.shiftMeta[adjustable[idx]].isLocked = true;
             }
 
-            // (c) 最大4連勤を保証：5連勤目に当たる日を休にする（決定的・前方走査）
-            //     均等配置(b)で大半は解消済み。残りをここで確実に潰す（休数が必要数を
-            //     多少超えても、連勤違反より休過多を優先＝安全側）。
+            // 最大4連勤の保証（決定的・前方走査。調整対象の研修日のみ休へ）
             let streak = 0;
             for (let i = 0; i < this.dates.length; i++) {
                 const d = this.dates[i];
                 const s = staff.shifts[d];
                 if (isWork(s)) {
                     streak++;
-                    if (streak > 4 && touchableDate(d)) {
-                        setRest(d);
+                    if (streak > 4 && adjSet.has(d) && s.startsWith('研修')) {
+                        staff.shifts[d] = '休';
+                        staff.shiftMeta[d].isLocked = true;
                         streak = 0;
                     }
-                    // 触れない日（希望出勤など）は休を入れられないので連勤継続のまま次へ
                 } else {
-                    // 休・公・空き等はカウントをリセット
                     streak = 0;
                 }
             }
+
+            // 遅→早の禁則を解消（研修内、調整対象のみ）
+            for (let i = 0; i < this.dates.length - 1; i++) {
+                const nd = this.dates[i + 1];
+                if (staff.shifts[this.dates[i]] === '研修（遅）' &&
+                    staff.shifts[nd] === '研修（早）' && adjSet.has(nd)) {
+                    staff.shifts[nd] = trainTypes.includes('研修（日）') ? '研修（日）' : '研修（遅）';
+                }
+            }
+
+            const finalRest = avail.reduce((c, d) => isRest(staff.shifts[d]) ? c + 1 : c, 0);
+            this.log(`  -> [研修生 ${staff.name}] target=${target}, 固定休=${fixedRest}, 研修期間の休=${restInTraining}, 最終休=${finalRest}`);
         });
     }
 
