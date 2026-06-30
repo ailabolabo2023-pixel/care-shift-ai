@@ -2247,6 +2247,8 @@ export class ShiftEngine {
         const isPresent = (s) => !!s && s !== '休' && s !== '公' && s !== '明';
         const metaOf = (st, d) => st.shiftMeta[d] || {};
         const restCount = (st) => this.dates.reduce((n, d) => isRest(st.shifts[d]) ? n + 1 : n, 0);
+        // 曜日固定の職員は固定パターンを崩さない（在所カウントには使うが、振替では動かさない）
+        const hasFixed = (st) => st['曜日固定'] != null && String(st['曜日固定']).trim() !== '';
 
         let guard = 0;
         let progressed = true;
@@ -2259,8 +2261,8 @@ export class ShiftEngine {
                 const present = members.filter(st => isPresent(st.shifts[d]));
                 if (present.length >= 1) continue;
 
-                // この日は全員不在。希望でない休を持つ人を振替候補に。
-                const flipCands = members.filter(st => isRest(st.shifts[d]) && !metaOf(st, d).isPreference);
+                // この日は全員不在。希望でなく曜日固定でない休を持つ人を振替候補に。
+                const flipCands = members.filter(st => isRest(st.shifts[d]) && !metaOf(st, d).isPreference && !hasFixed(st));
                 if (flipCands.length === 0) continue; // 全員希望休等で直せない
 
                 flipCands.sort((a, b) => restCount(b) - restCount(a)); // 休が多い人優先
@@ -2333,12 +2335,16 @@ export class ShiftEngine {
         const metaOf = (st, d) => st.shiftMeta[d] || {};
         const free = (st, d) => !metaOf(st, d).isPreference && !metaOf(st, d).isUnavailable && !this.isBeforeEmployment(st, d);
         const isStandby = (s) => isMark(s['事務員']) || isMark(s['サ責']) || isMark(s['管理者']) || isMark(s['施設長']) || isMark(s['主任']);
+        // 曜日固定の職員（例：管理者・施設長＝月〜金）は step2.5 の固定パターン（固定曜日=出勤、
+        // それ以外=休）が正しい姿。均等配置や入れ替えで崩さない＝対象外にする。
+        const hasFixedDays = (s) => s['曜日固定'] != null && String(s['曜日固定']).trim() !== '';
 
         // ============ Part 1: 待機系の 休 を均等配置（連休も連勤も同時に防ぐ） ============
-        // 予↔休 の入れ替えは要員数に一切影響しない（予は非カウント）。希望休は固定。
+        // 予↔休 の入れ替えは要員数に一切影響しない（予は非カウント）。希望休・曜日固定は尊重。
         const ROLE_MAX_CONSEC = 5;
         const standby = this.shiftTable.filter(s => !this.isStaffExclusive(s) && !this.isTraineeStaff(s) && isStandby(s));
         const groupKey = (s) => isMark(s['事務員']) ? 'office' : ((isMark(s['サ責']) || isMark(s['管理者'])) ? 'role' : 'other');
+        // カバー判定用グループは曜日固定者も含める（固定曜日の在所が在所としてカウントされる）。
         const groups = {};
         standby.forEach(s => { const k = groupKey(s); (groups[k] = groups[k] || []).push(s); });
 
@@ -2382,8 +2388,10 @@ export class ShiftEngine {
         };
 
         Object.values(groups).forEach(members => {
-            const G = Math.max(members.length, 1);
-            members.forEach((A, phase) => {
+            // 均等配置の対象は曜日固定でない人だけ（固定の人は触らない）。位相も非固定者で割る。
+            const flexMembers = members.filter(m => !hasFixedDays(m));
+            const G = Math.max(flexMembers.length, 1);
+            flexMembers.forEach((A, phase) => {
                 const flex = this.dates.filter(dt => (A.shifts[dt] === '休' || A.shifts[dt] === '予') && free(A, dt));
                 if (flex.length === 0) return;
                 const totalRest = this.dates.reduce((n, dt) => isRest(A.shifts[dt]) ? n + 1 : n, 0);
@@ -2459,7 +2467,7 @@ export class ShiftEngine {
             return out;
         };
 
-        const careTargets = this.shiftTable.filter(st => !this.isStaffExclusive(st) && !this.isTraineeStaff(st) && !isStandby(st));
+        const careTargets = this.shiftTable.filter(st => !this.isStaffExclusive(st) && !this.isTraineeStaff(st) && !isStandby(st) && !hasFixedDays(st));
 
         let pass = 0, changed = true;
         while (changed && pass < 4) {
