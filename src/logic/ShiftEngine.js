@@ -434,11 +434,13 @@ export class ShiftEngine {
             // 研修生の公休を月全体で必要数ちょうどに整える（研修期間が休だらけになる
             // のを防ぎ、研修後の休と合算して二重計上しないよう、調整フェーズ後に逆算）。
             this.step9_6_BalanceTraineeRest();
-            // 希望していないのに出る3連休以上を、人員数を崩さず分散（全施設共通）。
-            this.stepSpreadRestDays();
             // 施設別ルール：事務所/事業所を空にしないカバー（管理設定でON/OFF）。
             this.step9_7_EnsureOfficeCoverage();
             this.step9_8_EnsureRoleCoverage();
+            // 希望していないのに出る3連休以上を、人員数を崩さず分散（全施設共通）。
+            // ★カバー(9.7/9.8)の後＝最後に実行する。先に実行するとカバー側の予↔休調整で
+            //   分散が上書き（連休が復活）してしまうため。
+            this.stepSpreadRestDays();
             this.step10_FinalizeValidation();
 
             this.log("All steps completed successfully.");
@@ -2313,29 +2315,109 @@ export class ShiftEngine {
         this.ensureGroupCoverage(members, 'サ責/管理者');
     }
 
-    // 希望していないのに発生する3連休以上を分散する（全施設共通）。
-    //   仕組み：人員数を崩さない「2人×2日の入れ替え」。
-    //     d :  A=休, B=勤務X   →   A=X,  B=休
-    //     d2:  A=勤務Y, B=休   →   A=休, B=Y
-    //   各日の各勤務帯の人数は不変、A/Bの総休数も不変。Aの連休が割れ、Bは悪化しない。
-    //   希望休/使用不可は触らず、連勤・遅→早・夜明・週勤務上限を崩さず、3連休が
-    //   純減する場合のみ採用する（＝安全な改善のみ）。夜勤専従など専属・研修生は対象外
-    //   （週1夜勤などで長い休が構造的に生じるため）。
+    // 希望していないのに発生する連休（休の塊）を分散する（全施設共通）。
+    //   ・待機系(事務員/サ責/管理者/施設長/主任)：勤務は主に「予(待機)」で要員数に
+    //     非カウント。よって 休 を月内で均等配置すれば、連休(休の塊)も連勤(予の塊)も
+    //     同時に解消できる。グループ内で位相をずらして毎日最低1名の在所も両立。
+    //   ・一般介護職：実勤務は要員数にカウントされるため、人員数を崩さない
+    //     「2人×2日の入れ替え」で3連休以上だけを割る。
+    //   ・希望休/使用不可は固定、専属(夜勤専従等)・研修生は対象外。
     stepSpreadRestDays() {
-        this.log("Step 9.65: 不要な3連休以上を分散...");
+        this.log("Step 9.65: 連休(休の塊)・連勤(予の塊)を分散...");
         const isMark = (v) => v === true || v === '〇' || v === 'TRUE' || v === 1 || v === '1';
         const isRest = (s) => s === '公' || s === '休';
         const WORK = ["早", "日", "遅", "夜", "明", "予", "研", "研修（早）", "研修（日）", "研修（遅）", "研修（夜）"];
         const isWork = (s) => WORK.includes(s);
         const baseOf = (s) => (s && s.includes && s.includes('研修')) ? (s.match(/（(.*?)）/)?.[1]) : s;
         const SIMPLE = ['早', '日', '遅'];
-
-        const isRole = (st) => isMark(st['サ責']) || isMark(st['施設長']) || isMark(st['事務員']) || isMark(st['管理者']) || isMark(st['主任']);
-        const allowedConsec = (st) => isRole(st) ? 5 : 4;
-        const weekLimit = (st) => { const v = parseInt(st['勤務日数/週'], 10); return v > 0 ? v : 0; };
-        const canDo = (st, band) => isMark(st[band + '可']);
         const metaOf = (st, d) => st.shiftMeta[d] || {};
         const free = (st, d) => !metaOf(st, d).isPreference && !metaOf(st, d).isUnavailable && !this.isBeforeEmployment(st, d);
+        const isStandby = (s) => isMark(s['事務員']) || isMark(s['サ責']) || isMark(s['管理者']) || isMark(s['施設長']) || isMark(s['主任']);
+
+        // ============ Part 1: 待機系の 休 を均等配置（連休も連勤も同時に防ぐ） ============
+        // 予↔休 の入れ替えは要員数に一切影響しない（予は非カウント）。希望休は固定。
+        const ROLE_MAX_CONSEC = 5;
+        const standby = this.shiftTable.filter(s => !this.isStaffExclusive(s) && !this.isTraineeStaff(s) && isStandby(s));
+        const groupKey = (s) => isMark(s['事務員']) ? 'office' : ((isMark(s['サ責']) || isMark(s['管理者'])) ? 'role' : 'other');
+        const groups = {};
+        standby.forEach(s => { const k = groupKey(s); (groups[k] = groups[k] || []).push(s); });
+
+        // 長い勤務連続(予の塊など)を、内側の予を1つ休にして割る。総休数を保つため
+        // どこかの「2連続の休」を1つ予に戻して相殺する。相殺できなければ元に戻す。
+        const capWorkStreak = (A) => {
+            for (let iter = 0; iter < 12; iter++) {
+                let runStart = -1, run = 0, badStart = -1;
+                for (let i = 0; i <= this.dates.length; i++) {
+                    const s = i < this.dates.length ? A.shifts[this.dates[i]] : null;
+                    if (i < this.dates.length && isWork(s)) { if (run === 0) runStart = i; run++; }
+                    else { if (run > ROLE_MAX_CONSEC) { badStart = runStart; break; } run = 0; }
+                }
+                if (badStart < 0) break;
+                let e = badStart; while (e < this.dates.length && isWork(A.shifts[this.dates[e]])) e++;
+                const mid = Math.floor((badStart + e) / 2);
+                let placed = -1;
+                for (let off = 0; off < (e - badStart) && placed < 0; off++) {
+                    for (const j of [mid + off, mid - off]) {
+                        if (j < badStart || j >= e) continue;
+                        const dt = this.dates[j];
+                        if (A.shifts[dt] === '予' && free(A, dt)) { placed = j; break; }
+                    }
+                }
+                if (placed < 0) break;
+                const placedDt = this.dates[placed];
+                A.shifts[placedDt] = '休';
+                // 相殺：2連続の休の一方を予に戻す（連休も同時に減る）
+                let comp = false;
+                for (let i = 0; i < this.dates.length; i++) {
+                    const dt = this.dates[i];
+                    if (dt === placedDt) continue;
+                    if (A.shifts[dt] === '休' && free(A, dt)) {
+                        const prev = i > 0 ? A.shifts[this.dates[i - 1]] : null;
+                        const next = i < this.dates.length - 1 ? A.shifts[this.dates[i + 1]] : null;
+                        if (prev === '休' || next === '休') { A.shifts[dt] = '予'; comp = true; break; }
+                    }
+                }
+                if (!comp) { A.shifts[placedDt] = '予'; break; } // 相殺先なし→総休数維持のため戻して終了
+            }
+        };
+
+        Object.values(groups).forEach(members => {
+            const G = Math.max(members.length, 1);
+            members.forEach((A, phase) => {
+                const flex = this.dates.filter(dt => (A.shifts[dt] === '休' || A.shifts[dt] === '予') && free(A, dt));
+                if (flex.length === 0) return;
+                const totalRest = this.dates.reduce((n, dt) => isRest(A.shifts[dt]) ? n + 1 : n, 0);
+                const prefRest = this.dates.reduce((n, dt) => (isRest(A.shifts[dt]) && metaOf(A, dt).isPreference) ? n + 1 : n, 0);
+                let restToPlace = totalRest - prefRest;
+                if (restToPlace < 0) restToPlace = 0;
+                if (restToPlace > flex.length) restToPlace = flex.length;
+
+                flex.forEach(dt => { A.shifts[dt] = '予'; }); // いったん全部 予
+                const S = flex.length;
+                const chosen = new Set();
+                for (let k = 0; k < restToPlace; k++) {
+                    // 均等配置＋グループ内で位相(phase/G)をずらす→連休/連勤を防ぎつつ在所も両立
+                    let pos = Math.round((k + 0.5 + phase / G) * S / restToPlace);
+                    pos = ((pos % S) + S) % S;
+                    let t = 0; while (chosen.has(pos) && t < S) { pos = (pos + 1) % S; t++; }
+                    chosen.add(pos);
+                }
+                chosen.forEach(pos => { A.shifts[flex[pos]] = '休'; });
+                capWorkStreak(A);
+            });
+        });
+
+        // カバー保証：施設ルールONのグループは毎日最低1名を在所に（予↔休で公休数維持）。
+        const rules = this.data.facilityRules || {};
+        if (rules.officeClerkCoverage) this.ensureGroupCoverage((groups['office'] || []), '事務員');
+        if (rules.roleCoverage) this.ensureGroupCoverage((groups['role'] || []), 'サ責/管理者');
+
+        // ============ Part 2: 一般介護職の3連休以上を「2人×2日の入れ替え」で割る ============
+        //   d :  A=休, B=勤務X   →   A=X,  B=休 ／ d2: A=勤務Y, B=休 → A=休, B=Y
+        //   各日各帯の人数も A/B の総休数も不変。連勤・遅→早・夜明・週上限を崩さず純減時のみ採用。
+        const allowedConsec = (st) => isStandby(st) ? 5 : 4;
+        const weekLimit = (st) => { const v = parseInt(st['勤務日数/週'], 10); return v > 0 ? v : 0; };
+        const canDo = (st, band) => isMark(st[band + '可']);
 
         const analyze = (st) => {
             let maxStreak = 0, cur = 0, lateEarly = 0, nightDawn = 0, runs3 = 0, restRun = 0;
@@ -2377,42 +2459,19 @@ export class ShiftEngine {
             return out;
         };
 
-        const targets = this.shiftTable.filter(st => !this.isStaffExclusive(st) && !this.isTraineeStaff(st));
+        const careTargets = this.shiftTable.filter(st => !this.isStaffExclusive(st) && !this.isTraineeStaff(st) && !isStandby(st));
 
         let pass = 0, changed = true;
         while (changed && pass < 4) {
             pass++; changed = false;
-            for (const A of targets) {
+            for (const A of careTargets) {
                 const aInfo = analyze(A);
                 if (aInfo.runs3 === 0) continue;
                 const dCands = longRunRestDays(A);
                 let swapped = false;
                 for (const d of dCands) {
                     if (!isRest(A.shifts[d]) || !free(A, d)) continue;
-
-                    // (1) 待機系(事務員・サ責・管理者・施設長・主任)のみ：同一人で 休↔予 を
-                    //     入れ替え。予(待機)は要員数に非カウントで完全に人員数中立、かつ予は
-                    //     これらの職種の通常勤務なので連休を確実に割れる。一般介護職の休を
-                    //     勝手に予(待機)化はしない（別クレーム回避）。
-                    const isStandby = isMark(A['事務員']) || isMark(A['サ責']) || isMark(A['管理者']) || isMark(A['施設長']) || isMark(A['主任']);
-                    const di = this.dates.indexOf(d);
-                    const prevBase = di > 0 ? baseOf(A.shifts[this.dates[di - 1]]) : null;
-                    // 夜勤明けの休（前日が夜/明）は休のまま残す
-                    if (isStandby && prevBase !== '夜' && prevBase !== '明') {
-                        for (const d2 of this.dates) {
-                            if (d2 === d) continue;
-                            if (A.shifts[d2] !== '予') continue;
-                            if (!free(A, d2)) continue;
-                            const oAd = A.shifts[d], oAd2 = A.shifts[d2];
-                            A.shifts[d] = '予'; A.shifts[d2] = '休';
-                            if (analyze(A).runs3 < aInfo.runs3) { changed = true; swapped = true; break; }
-                            A.shifts[d] = oAd; A.shifts[d2] = oAd2;
-                        }
-                    }
-                    if (swapped) break;
-
-                    // (2) 一般職（予を持たない）向け：人員数を崩さない2人×2日の入れ替え。
-                    for (const B of targets) {
+                    for (const B of careTargets) {
                         if (B === A) continue;
                         const X = baseOf(B.shifts[d]);
                         if (!SIMPLE.includes(X)) continue;
