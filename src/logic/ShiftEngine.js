@@ -2156,11 +2156,12 @@ export class ShiftEngine {
                 for (const wantType of coverOrder) {
                     for (const date of this.dates) {
                         if (staff.shifts[date] !== wantType) continue;
-                        if (!freeToChange(staff, date)) continue;
-                        // その日に予で待機していて、種別的に入れる主任・サ責を探す
-                        const helper = roleHelpers.find(c => c.shifts[date] === '予'
-                            && freeToChange(c, date) && canCover(c, wantType)
-                            && this.isShiftAllowed(c, date, wantType));
+                        if (meta(staff, date).isPreference) continue; // 本人の希望勤務は動かさない（ロックは無視）
+                        // その日に予で待機していて、種別的に入れる主任・サ責を探す。
+                        // 予はロックされていても肩代わりに回してよい（希望のみ保護）。
+                        const helper = roleHelpers.find(c => usableYobi(c, date)
+                            && canCover(c, wantType)
+                            && allowedIgnoringLock(c, date, wantType));
                         if (helper) {
                             helper.shifts[date] = wantType; // 主任・サ責が肩代わり（人数は維持）
                             if (helper.shiftMeta[date]) helper.shiftMeta[date].isLocked = false;
