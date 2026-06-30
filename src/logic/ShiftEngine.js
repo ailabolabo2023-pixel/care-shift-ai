@@ -1266,50 +1266,68 @@ export class ShiftEngine {
             return (bNight ? 1 : 0) - (aNight ? 1 : 0);
         });
 
-        // ★夜勤専従の偏り防止（全施設共通）：専属の夜勤可スタッフを人ごとに日付順で
-        //   逐次に埋めると同じ日へ集中しがち。夜勤回数を均等化しながら割り当てることで
-        //   日付（曜日）を自然に分散させる。要員数が複数必要な日は重複してよい。
+        // ★夜勤専従の偏り防止（全施設共通）：専属の夜勤可スタッフを「日付順で逐次に埋める」と、
+        //   各週の最初の夜勤必要日で週1枠を使い切り、毎週同じ曜日へ全員が集中してしまう。
+        //   そこで【週単位】で各人を別々の曜日へ振り分ける。既に他の専従が入った日は避け、
+        //   週ごとに順序を乱択して、週によっても担当曜日が入れ替わるようにする。
         const exNightStaff = exclusiveStaff.filter(s =>
             s['夜可'] === true || s['夜可'] === "TRUE" || s['夜可'] === 1 || String(s['夜可']).trim() === "〇"
         );
         if (exNightStaff.length > 0) {
-            const nightCounts = {};
-            exNightStaff.forEach(s => { nightCounts[s.name] = 0; });
+            const nightOnDate = (date) => this.shiftTable.filter(s => s.shifts[date] === '夜').length;
+            const weeklyLimit = (s) => {
+                const v = parseInt(s['夜勤回数/週'], 10);
+                return v > 0 ? v : 1;
+            };
 
-            this.dates.forEach((date, i) => {
-                const needed = reqMap[date]?.['夜'] || 0;
-                if (needed <= 0) return;
+            // 週はインデックス7日区切り（isShiftAllowed の週上限判定と一致させる）
+            const weeks = [];
+            for (let i = 0; i < this.dates.length; i += 7) {
+                const idxs = [];
+                for (let k = i; k < Math.min(i + 7, this.dates.length); k++) idxs.push(k);
+                weeks.push(idxs);
+            }
 
-                const current = this.shiftTable.filter(s => s.shifts[date] === '夜').length;
-                let need = needed - current;
-                if (need <= 0) return;
+            weeks.forEach(weekIdxs => {
+                const placedThisWeek = {};
+                exNightStaff.forEach(s => { placedThisWeek[s.name] = 0; });
+                const usedDays = new Set(); // この週で既に専従が入った日（分散のため避ける）
+                const maxRounds = Math.max(...exNightStaff.map(weeklyLimit));
 
-                let cand = exNightStaff.filter(s => {
-                    if (s.shifts[date] !== "") return false;
-                    if (!this.isShiftAllowed(s, date, '夜')) return false;
-                    const nd = this.dates[i + 1];
-                    // 翌日（明が入る枠）が埋まっていて明でないなら不可
-                    if (nd && s.shifts[nd] !== "" && s.shifts[nd] !== "明") return false;
-                    return true;
-                });
+                for (let round = 0; round < maxRounds; round++) {
+                    // 週ごとにスタッフ順を乱択（同じ人が同じ曜日に偏らないように）
+                    const order = [...exNightStaff].sort(() => Math.random() - 0.5);
+                    order.forEach(staff => {
+                        if (placedThisWeek[staff.name] >= weeklyLimit(staff)) return;
 
-                while (need > 0 && cand.length > 0) {
-                    // 自分の夜勤回数が最も少ない人を優先（均等化＝日付分散）。同数は乱択。
-                    cand.sort((a, b) => nightCounts[a.name] - nightCounts[b.name]);
-                    const best = nightCounts[cand[0].name];
-                    const pool = cand.filter(s => nightCounts[s.name] === best);
-                    const chosen = pool[Math.floor(Math.random() * pool.length)];
+                        const dayCands = weekIdxs.filter(i => {
+                            const date = this.dates[i];
+                            const needed = reqMap[date]?.['夜'] || 0;
+                            if (needed <= 0) return false;
+                            if (nightOnDate(date) >= needed) return false;
+                            if (staff.shifts[date] !== "") return false;
+                            if (!this.isShiftAllowed(staff, date, '夜')) return false;
+                            const nd = this.dates[i + 1];
+                            if (nd && staff.shifts[nd] !== "" && staff.shifts[nd] !== "明") return false;
+                            return true;
+                        });
+                        if (dayCands.length === 0) return;
 
-                    const d1 = this.dates[i + 1];
-                    const d2 = this.dates[i + 2];
-                    this.applyNightShiftSet(chosen, date);
-                    chosen.shiftMeta[date].isLocked = true;
-                    if (d1) chosen.shiftMeta[d1].isLocked = true;
-                    if (d2) chosen.shiftMeta[d2].isLocked = true;
+                        // 他の専従と同じ日を避ける（分散）。避けられない時のみ重複可。
+                        const spread = dayCands.filter(i => !usedDays.has(i));
+                        const pool = spread.length > 0 ? spread : dayCands;
+                        const i = pool[Math.floor(Math.random() * pool.length)];
 
-                    nightCounts[chosen.name]++;
-                    need--;
-                    cand = cand.filter(c => c !== chosen);
+                        const d1 = this.dates[i + 1];
+                        const d2 = this.dates[i + 2];
+                        this.applyNightShiftSet(staff, this.dates[i]);
+                        staff.shiftMeta[this.dates[i]].isLocked = true;
+                        if (d1) staff.shiftMeta[d1].isLocked = true;
+                        if (d2) staff.shiftMeta[d2].isLocked = true;
+
+                        placedThisWeek[staff.name]++;
+                        usedDays.add(i);
+                    });
                 }
             });
         }
