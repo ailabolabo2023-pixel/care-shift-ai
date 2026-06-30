@@ -2029,8 +2029,21 @@ export class ShiftEngine {
         const isMark = (v) => v === true || v === '〇' || v === 'TRUE';
         const isChief = (s) => isMark(s['主任']);
         const isSekinin = (s) => isMark(s['サ責']);
+        const isClerk = (s) => isMark(s['事務員']);
+        const isDirector = (s) => isMark(s['施設長']);
+        const isAdmin = (s) => isMark(s['管理者']);
+        // 事務員・施設長・管理者は調整で予や勤務を動かさない（保護対象・最優先）。
+        // 仮に主任/サ責を兼任していても、保護を優先して触らない。
+        const isProtected = (s) => isClerk(s) || isDirector(s) || isAdmin(s);
         const isExclusive = (s) => this.isStaffExclusive(s);
         const isRole = (s) => isChief(s) || isSekinin(s);
+        // 公休不足の肩代わりで、主任・サ責が入れる勤務種別。
+        //  サ責：日勤のみ（早・遅・夜・明は不可）／主任：早・日・遅（夜勤は不可）
+        const canCover = (helper, type) => {
+            if (isChief(helper)) return ['早', '日', '遅'].includes(type);
+            if (isSekinin(helper)) return type === '日';
+            return false;
+        };
         const meta = (s, d) => s.shiftMeta[d] || {};
         const freeToChange = (s, d) => !meta(s, d).isPreference && !meta(s, d).isLocked;
         // 予備(予)は「展開するための待機」なので、ロックされていても勤務に回してよい（希望のみ保護）。
@@ -2080,7 +2093,7 @@ export class ShiftEngine {
                         // ① 公休過多（休>目標）の人の '休' を 勤務に（過多が大きい人から）
                         const excess = this.shiftTable
                             .map(s => ({ s, over: restCount(s) - this.getRequiredRest(s) }))
-                            .filter(x => x.over > 0 && x.s.shifts[date] === '休'
+                            .filter(x => x.over > 0 && x.s.shifts[date] === '休' && !isProtected(x.s)
                                 && freeToChange(x.s, date) && allowedIgnoringLock(x.s, date, type))
                             .sort((a, b) => b.over - a.over);
                         if (excess.length) {
@@ -2090,7 +2103,7 @@ export class ShiftEngine {
                         }
                         // ② 予備の人の '予' を 勤務に（主任・サ責は使用回数が少ない人優先＝均等）
                         const yobi = this.shiftTable
-                            .filter(s => usableYobi(s, date) && allowedIgnoringLock(s, date, type))
+                            .filter(s => usableYobi(s, date) && !isProtected(s) && allowedIgnoringLock(s, date, type))
                             .sort((a, b) => {
                                 const ar = isRole(a) ? 0 : 1, br = isRole(b) ? 0 : 1;
                                 if (ar !== br) return ar - br;            // 役職者を優先的に動かす
@@ -2105,7 +2118,7 @@ export class ShiftEngine {
                         // ③ スワップ補完：その日が休の人を勤務にし、別の日の予を休へ振替（公休数は不変）。
                         //    予を多く持つ人（主任・サ責ら）優先。これで予備不在の日も埋まる。
                         const swapCand = this.shiftTable
-                            .filter(s => !isExclusive(s) && s.shifts[date] === '休'
+                            .filter(s => !isExclusive(s) && !isProtected(s) && s.shifts[date] === '休'
                                 && !meta(s, date).isPreference && allowedIgnoringLock(s, date, type)
                                 && this.dates.some(d2 => d2 !== date && usableYobi(s, d2)))
                             .sort((a, b) => {
@@ -2128,27 +2141,37 @@ export class ShiftEngine {
             if (!filled) break;
         }
 
-        // ---- B. 公休が足りない人（働きすぎ）：勤務を主任・サ責の予に肩代わりしてもらい休に ----
-        const roleHelpers = this.shiftTable.filter(s => isChief(s) || isSekinin(s));
+        // ---- B. 公休が足りない人（働きすぎ）：その日の勤務を主任・サ責の予に肩代わりしてもらい休に ----
+        //   基本は「日勤」の日を代わってもらう。次点で早・遅（主任のみ可）。夜勤は主任・サ責とも不可。
+        // 肩代わり役は主任・サ責のみ（保護対象が兼任していても除外）
+        const roleHelpers = this.shiftTable.filter(s => (isChief(s) || isSekinin(s)) && !isProtected(s));
+        const coverOrder = ['日', '早', '遅']; // 日勤を最優先。夜（夜・明）は肩代わり対象外。
         this.shiftTable.forEach(staff => {
             if (roleHelpers.includes(staff)) return;
+            if (isProtected(staff)) return; // 事務員・施設長・管理者は触らない
             let need = this.getRequiredRest(staff) - restCount(staff); // >0 = 休が足りない
             let guard = 0;
             while (need > 0 && guard++ < 40) {
                 let swapped = false;
-                for (const date of this.dates) {
-                    const sh = staff.shifts[date];
-                    if (!['早', '日', '遅', '夜'].includes(sh)) continue;
-                    if (!freeToChange(staff, date)) continue;
-                    const helper = roleHelpers.find(c => c.shifts[date] === '予'
-                        && freeToChange(c, date) && this.isShiftAllowed(c, date, sh));
-                    if (helper) {
-                        helper.shifts[date] = sh;   // 主任・サ責が肩代わり（人数は維持）
-                        staff.shifts[date] = '休';  // 本人は休
-                        need--; swapped = true;
-                        this.log(`  -> [公休不足] ${staff.name} の${sh}(${date})を ${helper.name} が肩代わり`);
-                        break;
+                for (const wantType of coverOrder) {
+                    for (const date of this.dates) {
+                        if (staff.shifts[date] !== wantType) continue;
+                        if (!freeToChange(staff, date)) continue;
+                        // その日に予で待機していて、種別的に入れる主任・サ責を探す
+                        const helper = roleHelpers.find(c => c.shifts[date] === '予'
+                            && freeToChange(c, date) && canCover(c, wantType)
+                            && this.isShiftAllowed(c, date, wantType));
+                        if (helper) {
+                            helper.shifts[date] = wantType; // 主任・サ責が肩代わり（人数は維持）
+                            if (helper.shiftMeta[date]) helper.shiftMeta[date].isLocked = false;
+                            staff.shifts[date] = '休';       // 本人は休
+                            if (staff.shiftMeta[date]) staff.shiftMeta[date].isLocked = false;
+                            need--; swapped = true;
+                            this.log(`  -> [公休不足] ${staff.name} の${wantType}(${date})を ${helper.name} が肩代わり`);
+                            break;
+                        }
                     }
+                    if (swapped) break;
                 }
                 if (!swapped) break;
             }
@@ -2157,6 +2180,7 @@ export class ShiftEngine {
         // ---- C. 公休が多すぎる人（専属以外）：余分な休を '予'(待機) に変換して公休を減らす ----
         this.shiftTable.forEach(staff => {
             if (isExclusive(staff)) return;
+            if (isProtected(staff)) return; // 保護対象は調整で触らない（公休調整はStep2.8で実施）
             let over = restCount(staff) - this.getRequiredRest(staff);
             if (over <= 0) return;
             for (const date of this.dates) {
