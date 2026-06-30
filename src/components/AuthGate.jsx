@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { pullToLocal } from '../lib/cloudSync';
+import { setFacilityId, facilityIdFromEmail } from '../lib/facility';
 import Login from './Login';
 
 // 認証ゲート：未ログインならLogin、ログイン後はクラウド→ローカル同期を済ませてから子を描画。
@@ -10,8 +11,16 @@ export default function AuthGate({ children }) {
     const pulledFor = useRef(null);
 
     useEffect(() => {
-        supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
+        const remember = (s) => {
+            // ログイン中の施設ID（スマホ連携の fid）を端末に控える
+            if (s?.user?.email) setFacilityId(facilityIdFromEmail(s.user.email));
+        };
+        supabase.auth.getSession().then(({ data }) => {
+            remember(data.session);
+            setSession(data.session ?? null);
+        });
         const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+            remember(s);
             setSession(s ?? null);
         });
         return () => sub.subscription.unsubscribe();

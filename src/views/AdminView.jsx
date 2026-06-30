@@ -6,7 +6,9 @@ import PreferencesTable from '../components/admin/PreferencesTable';
 import CarryOverTable from '../components/admin/CarryOverTable';
 import { Users, Calendar, Timer, Smartphone, Download, Link2, Copy, Check, ExternalLink } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { fetchFormResponses, buildPreferencesFromForm } from '../utils/formImport';
+import { fetchFormResponses, buildPreferencesFromForm, DEFAULT_FORM_CSV_URL } from '../utils/formImport';
+import { getFacilityId } from '../lib/facility';
+import { getStaffPageUrl } from '../utils/staffSync';
 
 
 
@@ -15,10 +17,13 @@ const AdminView = ({ setMainTab }) => {
     const [activeTab, setActiveTab] = useState('staff');
     const [currentMonth, setCurrentMonth] = useState(targetDate || new Date().toISOString().slice(0, 7));
 
-    // --- スマホ希望の取り込み（施設ごとの連携設定） ---
-    // ※URLは施設ごとに違う。1端末＝1施設の前提で localStorage に保存する。
+    // --- スマホ希望の取り込み（マルチ施設：fid=施設IDで自動振り分け） ---
+    // 配布URL・取り込みCSVは共通の固定値を内蔵し、ログイン施設IDで自動的に分離する。
+    // ※「上書きURL」は通常空欄でOK（共通URLを使う）。特殊な構成のときだけ使う。
+    const facilityId = getFacilityId();
+    const staffPageUrl = getStaffPageUrl(); // 共通URL + ?fid=施設ID（職員にLINEで配るURL）
     const [webAppUrl, setWebAppUrl] = useState(() => localStorage.getItem('care_shift_ai_webapp_url') || '');
-    const [csvUrl, setCsvUrl] = useState(() => localStorage.getItem('care_shift_ai_form_csv_url') || '');
+    const [csvUrl, setCsvUrl] = useState(() => localStorage.getItem('care_shift_ai_form_csv_url') || DEFAULT_FORM_CSV_URL);
     const [importing, setImporting] = useState(false);
     const [importMsg, setImportMsg] = useState(null); // { type: 'ok' | 'err', text }
     const [copied, setCopied] = useState(false);
@@ -31,9 +36,9 @@ const AdminView = ({ setMainTab }) => {
     }, [webAppUrl]);
 
     const copySmartphoneUrl = async () => {
-        if (!webAppUrl) return;
+        if (!staffPageUrl) return;
         try {
-            await navigator.clipboard.writeText(webAppUrl.trim());
+            await navigator.clipboard.writeText(staffPageUrl);
             setCopied(true);
             setTimeout(() => setCopied(false), 1500);
         } catch (e) { /* クリップボード不可でも致命的ではない */ }
@@ -59,7 +64,7 @@ const AdminView = ({ setMainTab }) => {
             const prefKey = getPreferencesKey();
             const existing = excelData[prefKey] || [];
             const { newPrefs, importedNames, unknownNames } = buildPreferencesFromForm(
-                rows, master, existing, currentMonth
+                rows, master, existing, currentMonth, facilityId
             );
 
             if (importedNames.length === 0 && unknownNames.length === 0) {
@@ -139,56 +144,71 @@ const AdminView = ({ setMainTab }) => {
             {/* スマホ連携パネル（①施設ごとの設定 ②取り込み） */}
             {activeTab === 'preferences' && (
                 <div className="space-y-3">
-                    {/* ① この施設の連携URL設定 */}
+                    {/* ① この施設の配布URL（自動生成） */}
                     <div className="bg-gradient-to-r from-sky-50 to-indigo-50 border border-sky-200 rounded-xl p-4 space-y-3">
                         <div className="flex items-center gap-2 text-sky-800 font-bold">
-                            <Link2 size={18} /> この施設のスマホ連携設定
-                            <span className="text-xs font-normal text-sky-600">（施設ごとに専用URL）</span>
+                            <Link2 size={18} /> 職員に配るスマホURL
+                            {facilityId && (
+                                <span className="text-xs font-normal text-sky-600">（施設ID: <b>{facilityId}</b>）</span>
+                            )}
                         </div>
                         <p className="text-xs text-stone-500 leading-relaxed">
-                            下の2つは<b>この施設専用</b>のURLです。別施設では別のURLを設定してください（混ざりません）。<br />
-                            ※この設定はこの端末に保存されます。施設ごとに端末（またはブラウザ）を分けて使ってください。
+                            このURLは<b>この施設専用</b>に自動で作られます（末尾の <code>?fid={facilityId || '施設ID'}</code> で他施設と分かれます）。<br />
+                            LINEなどで職員に配ってください。<b>設定は不要</b>です。
                         </p>
 
-                        <div>
-                            <label className="text-xs font-bold text-stone-600">① 職員に配るスマホ入力ページURL（名簿の同期にも使われます）</label>
-                            <div className="flex flex-col sm:flex-row gap-2 mt-1">
-                                <input
-                                    type="text"
-                                    value={webAppUrl}
-                                    onChange={(e) => setWebAppUrl(e.target.value)}
-                                    placeholder="https://script.google.com/macros/s/.../exec"
-                                    className="flex-1 px-3 py-2 border border-sky-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-sky-200"
-                                />
-                                <button
-                                    onClick={copySmartphoneUrl}
-                                    disabled={!webAppUrl}
-                                    className={`flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg font-bold text-sm whitespace-nowrap transition-all ${!webAppUrl ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : 'bg-sky-600 text-white hover:bg-sky-700'}`}
-                                >
-                                    {copied ? <Check size={16} /> : <Copy size={16} />}
-                                    {copied ? 'コピー済' : 'コピー'}
-                                </button>
-                                <a
-                                    href={webAppUrl ? webAppUrl.trim() : undefined}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className={`flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg font-bold text-sm whitespace-nowrap border transition-all ${!webAppUrl ? 'border-stone-200 text-stone-300 pointer-events-none' : 'border-sky-300 text-sky-700 hover:bg-sky-100'}`}
-                                >
-                                    <ExternalLink size={16} /> 開く
-                                </a>
-                            </div>
-                        </div>
-
-                        <div>
-                            <label className="text-xs font-bold text-stone-600">② 取り込み用CSV URL（回答シートのexport形式）</label>
+                        <div className="flex flex-col sm:flex-row gap-2">
                             <input
                                 type="text"
-                                value={csvUrl}
-                                onChange={(e) => setCsvUrl(e.target.value)}
-                                placeholder="https://docs.google.com/spreadsheets/d/.../export?format=csv&gid=..."
-                                className="w-full mt-1 px-3 py-2 border border-sky-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                                value={staffPageUrl}
+                                readOnly
+                                onFocus={(e) => e.target.select()}
+                                className="flex-1 px-3 py-2 border border-sky-300 rounded-lg text-sm bg-white/70 outline-none focus:ring-2 focus:ring-sky-200"
                             />
+                            <button
+                                onClick={copySmartphoneUrl}
+                                disabled={!staffPageUrl}
+                                className={`flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg font-bold text-sm whitespace-nowrap transition-all ${!staffPageUrl ? 'bg-stone-200 text-stone-400 cursor-not-allowed' : 'bg-sky-600 text-white hover:bg-sky-700'}`}
+                            >
+                                {copied ? <Check size={16} /> : <Copy size={16} />}
+                                {copied ? 'コピー済' : 'コピー'}
+                            </button>
+                            <a
+                                href={staffPageUrl || undefined}
+                                target="_blank"
+                                rel="noreferrer"
+                                className={`flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg font-bold text-sm whitespace-nowrap border transition-all ${!staffPageUrl ? 'border-stone-200 text-stone-300 pointer-events-none' : 'border-sky-300 text-sky-700 hover:bg-sky-100'}`}
+                            >
+                                <ExternalLink size={16} /> 開く
+                            </a>
                         </div>
+
+                        {/* 上級者向け：通常は触らない上書き設定 */}
+                        <details className="text-xs text-stone-500">
+                            <summary className="cursor-pointer select-none text-sky-700 font-bold">上級者向け設定（通常は不要）</summary>
+                            <div className="mt-2 space-y-2">
+                                <div>
+                                    <label className="text-xs font-bold text-stone-600">スマホページの基本URLを上書き（空欄=共通URL）</label>
+                                    <input
+                                        type="text"
+                                        value={webAppUrl}
+                                        onChange={(e) => setWebAppUrl(e.target.value)}
+                                        placeholder="https://script.google.com/macros/s/.../exec"
+                                        className="w-full mt-1 px-3 py-2 border border-sky-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-xs font-bold text-stone-600">取り込み用CSV URLを上書き（空欄=共通URL）</label>
+                                    <input
+                                        type="text"
+                                        value={csvUrl}
+                                        onChange={(e) => setCsvUrl(e.target.value)}
+                                        placeholder={DEFAULT_FORM_CSV_URL}
+                                        className="w-full mt-1 px-3 py-2 border border-sky-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-sky-200"
+                                    />
+                                </div>
+                            </div>
+                        </details>
                     </div>
 
                     {/* ② 取り込み実行 */}

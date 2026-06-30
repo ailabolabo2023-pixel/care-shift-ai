@@ -3,6 +3,10 @@ import * as XLSX from 'xlsx';
 // 希望テーブルが持つ項目（PreferencesTable と同じ）
 export const PREF_FIELDS = ['休み希望', '有休', '早番希望', '日勤希望', '遅出希望', '夜勤希望', '出勤不可', '予備', '誕休', '研修', '研修（夜）'];
 
+// 全施設で共通の回答シート（CSV export）。施設の振り分けは行内の「施設ID」列で行う。
+export const DEFAULT_FORM_CSV_URL =
+    'https://docs.google.com/spreadsheets/d/1O3CHsgE74jN7KJDTPYBJ9W1DkYN8Xl4PZCpUboXub7g/export?format=csv&gid=62709528';
+
 /**
  * 「2026-07」「2026/7」「2026年7月」などを "YYYY-MM" に正規化する。
  */
@@ -52,12 +56,22 @@ const findKey = (row, target) => {
 
 /**
  * フォームの回答行・既存の希望・スタッフ名簿から、指定月の希望テーブルを組み立てる。
+ * @param {string} [fid] 施設ID。渡すと「施設ID」列がこの施設の行だけに絞り込む（マルチ施設対応）。
  * @returns {{ newPrefs: Object[], importedNames: string[], unknownNames: string[] }}
  */
-export const buildPreferencesFromForm = (formRows, master, existingPrefs, currentMonth) => {
+export const buildPreferencesFromForm = (formRows, master, existingPrefs, currentMonth, fid) => {
     const latestByName = {};
 
-    (formRows || []).forEach((row) => {
+    // 施設IDが指定されていれば、その施設の回答行だけに絞る。
+    // （施設ID列が無い古い行は対象外になる）
+    const scoped = fid
+        ? (formRows || []).filter((row) => {
+            const k = findKey(row, '施設ID');
+            return k != null && String(row[k]).trim().toLowerCase() === String(fid).trim().toLowerCase();
+        })
+        : (formRows || []);
+
+    scoped.forEach((row) => {
         const nameKey = findKey(row, '氏名') || findKey(row, '名前');
         if (!nameKey) return;
         const name = String(row[nameKey]).trim();
